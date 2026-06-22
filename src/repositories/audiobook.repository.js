@@ -129,9 +129,8 @@ export class FirestoreAudiobookRepository {
 
   async markReady(bookId, audio) {
     const timestamp = this.serverTimestamp();
-    const batch = this.firestore.batch();
-    batch.set(
-      this.bookRef(bookId),
+    return this.updateGenerationStateIfBookExists(
+      bookId,
       {
         generationStatus: "ready_for_review",
         reviewStatus: "pending",
@@ -139,10 +138,6 @@ export class FirestoreAudiobookRepository {
         generationError: null,
         updatedAt: timestamp,
       },
-      { merge: true },
-    );
-    batch.set(
-      this.chapterRef(bookId),
       {
         ...audio,
         generationStatus: "ready_for_review",
@@ -150,9 +145,7 @@ export class FirestoreAudiobookRepository {
         generationError: null,
         updatedAt: timestamp,
       },
-      { merge: true },
     );
-    await batch.commit();
   }
 
   async markFailed(bookId, generationError) {
@@ -163,10 +156,25 @@ export class FirestoreAudiobookRepository {
       generationError,
       updatedAt: timestamp,
     };
-    const batch = this.firestore.batch();
-    batch.set(this.bookRef(bookId), { ...state, reviewStatus: "pending" }, { merge: true });
-    batch.set(this.chapterRef(bookId), state, { merge: true });
-    await batch.commit();
+    return this.updateGenerationStateIfBookExists(
+      bookId,
+      { ...state, reviewStatus: "pending" },
+      state,
+    );
+  }
+
+  async updateGenerationStateIfBookExists(bookId, bookState, chapterState) {
+    const bookRef = this.bookRef(bookId);
+    const chapterRef = this.chapterRef(bookId);
+    return this.firestore.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(bookRef);
+      if (!snapshot.exists) {
+        return false;
+      }
+      transaction.set(bookRef, bookState, { merge: true });
+      transaction.set(chapterRef, chapterState, { merge: true });
+      return true;
+    });
   }
 
   async listPendingGenerationJobs() {

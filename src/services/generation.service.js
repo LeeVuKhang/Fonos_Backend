@@ -27,18 +27,25 @@ export class GenerationService {
         body: audio,
         contentType: "audio/mpeg",
       });
-      await this.repository.markReady(input.bookId, {
+      const persisted = await this.repository.markReady(input.bookId, {
         audioUrl,
         s3Key,
         audioStoragePath: s3Key,
       });
+      if (persisted === false) {
+        this.logger?.warn?.({ bookId: input.bookId }, "Discarded generation result for deleted audiobook");
+        return;
+      }
       this.logger?.info?.(
         { bookId: input.bookId, creatorUid: input.creatorUid, chapterId: input.chapterId },
         "Audiobook generation completed",
       );
     } catch (error) {
       try {
-        await this.repository.markFailed(job.bookId, SAFE_GENERATION_ERROR);
+        const persisted = await this.repository.markFailed(job.bookId, SAFE_GENERATION_ERROR);
+        if (persisted === false) {
+          this.logger?.warn?.({ bookId: job.bookId }, "Skipped failure state for deleted audiobook");
+        }
       } catch (writeError) {
         this.logger?.error?.({ err: writeError, bookId: job.bookId }, "Failed to persist job failure");
       }
