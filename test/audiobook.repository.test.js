@@ -202,6 +202,27 @@ describe("FirestoreAudiobookRepository", () => {
     });
   });
 
+  it("does not recreate a deleted book when a generation job finishes", async () => {
+    const state = createFirestore({
+      "book-1": { creatorUid: "user-1", generationStatus: "pending_generation", createdByUser: true },
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+    state.books.delete("book-1");
+
+    await repository.markFailed("book-1", "Safe error");
+    await repository.markReady("book-1", {
+      audioUrl: "https://example.com/audio.mp3",
+      s3Key: "audio.mp3",
+      audioStoragePath: "audio.mp3",
+    });
+
+    expect(state.books.has("book-1")).toBe(false);
+    expect(state.chapters.has("books/book-1/chapters/chapter_1")).toBe(false);
+  });
+
   it("loads pending generation input from book and chapter", async () => {
     const state = createFirestore({
       "book-1": {
