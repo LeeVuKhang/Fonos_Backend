@@ -22,13 +22,16 @@ describe("AwsAudioService", () => {
       engine: "neural",
     });
 
-    expect(pollyClient.send.mock.calls[0][0].input).toEqual({
-      Text: "Hello",
-      VoiceId: "Matthew",
-      LanguageCode: "en-US",
-      Engine: "neural",
-      OutputFormat: "mp3",
-    });
+    const input = pollyClient.send.mock.calls[0][0].input;
+    expect(input.TextType).toBe("ssml");
+    expect(input.Text).toContain('<prosody rate="65%">');
+    expect(input.Text).toContain("<s>Hello</s>");
+    expect(input.Text).toContain('<break time="800ms"/>');
+    expect(input.VoiceId).toBe("Matthew");
+    expect(input.LanguageCode).toBe("en-US");
+    expect(input.Engine).toBe("neural");
+    expect(input.OutputFormat).toBe("mp3");
+    expect(input.SampleRate).toBe("24000");
     expect(transformToByteArray).toHaveBeenCalledOnce();
     expect(result).toEqual(Buffer.from([1, 2, 3]));
   });

@@ -95,7 +95,7 @@ Creates a draft and `chapter_1`.
   "author": "Student Name",
   "coverUrl": "https://example.com/cover.jpg",
   "chapterTitle": "Chapter 1",
-  "chapterText": "Text to synthesize. Max 4000 characters.",
+  "chapterText": "Text to synthesize. Max 3500 words.",
   "languageCode": "en-US",
   "voiceId": "Matthew"
 }

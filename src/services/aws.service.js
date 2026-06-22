@@ -27,13 +27,39 @@ export class AwsAudioService {
   }
 
   async synthesizeSpeech({ text, voiceId, languageCode, engine }) {
+    // Escape XML special characters for SSML
+    const escaped = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+
+    // Split into paragraphs, then sentences, and wrap with <p>/<s> tags
+    const paragraphs = escaped.split(/\n\n+/).filter((p) => p.trim());
+    const ssmlBody = paragraphs
+      .map((para) => {
+        // Split on sentence-ending punctuation followed by whitespace
+        const sentences = para
+          .split(/(?<=[.!?])\s+/)
+          .filter((s) => s.trim())
+          .map((s) => `<s>${s.trim()}</s><break time="800ms"/>`)
+          .join("\n        ");
+        return `<p>\n        ${sentences}\n      </p>`;
+      })
+      .join('\n      <break time="1100ms"/>\n      ');
+
+    const ssml = `<speak>\n  <prosody rate="65%">\n      ${ssmlBody}\n  </prosody>\n</speak>`;
+
     const response = await this.pollyClient.send(
       new SynthesizeSpeechCommand({
-        Text: text,
+        Text: ssml,
+        TextType: "ssml",
         VoiceId: voiceId,
         LanguageCode: languageCode,
         Engine: engine,
         OutputFormat: "mp3",
+        SampleRate: "24000",
       }),
     );
     return audioStreamToBuffer(response.AudioStream);

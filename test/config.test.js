@@ -8,8 +8,8 @@ const validEnv = {
   FIREBASE_PROJECT_ID: "fonos-demo",
   AWS_REGION: "us-east-1",
   S3_BUCKET: "fonos-demo-audio",
-  POLLY_ENGINE: "neural",
-  MAX_CHAPTER_TEXT_CHARS: "4000",
+  POLLY_ENGINE: "long-form",
+  MAX_CHAPTER_TEXT_WORDS: "3500",
 };
 
 describe("loadConfig", () => {
@@ -23,8 +23,8 @@ describe("loadConfig", () => {
       firebaseProjectId: "fonos-demo",
       awsRegion: "us-east-1",
       s3Bucket: "fonos-demo-audio",
-      pollyEngine: "neural",
-      maxChapterTextChars: 4000,
+      pollyEngine: "long-form",
+      maxChapterTextWords: 3500,
     });
   });
 

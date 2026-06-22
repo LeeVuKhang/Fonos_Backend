@@ -14,6 +14,10 @@ const validDraft = {
   voiceId: "Matthew",
 };
 
+function repeatedWords(count) {
+  return Array.from({ length: count }, () => "word").join(" ");
+}
+
 function createTestContext(overrides = {}) {
   const audiobookService = {
     createDraft: vi.fn().mockResolvedValue({
@@ -96,18 +100,19 @@ describe("audiobook API", () => {
     );
   });
 
-  it("accepts chapter text up to 4000 characters", async () => {
+  it("accepts chapter text up to 3500 words", async () => {
     const { app, audiobookService } = createTestContext();
+    const chapterText = repeatedWords(3500);
 
     const response = await request(app)
       .post("/api/v1/audiobooks")
       .set("Authorization", "Bearer valid-token")
-      .send({ ...validDraft, chapterText: "x".repeat(4000) });
+      .send({ ...validDraft, chapterText });
 
     expect(response.status).toBe(201);
     expect(audiobookService.createDraft).toHaveBeenCalledWith(
       "user-1",
-      expect.objectContaining({ chapterText: "x".repeat(4000) }),
+      expect.objectContaining({ chapterText }),
     );
   });
 
@@ -117,7 +122,7 @@ describe("audiobook API", () => {
     const response = await request(app)
       .post("/api/v1/audiobooks")
       .set("Authorization", "Bearer valid-token")
-      .send({ ...validDraft, chapterText: "x".repeat(4001), voiceId: "Joanna" });
+      .send({ ...validDraft, chapterText: repeatedWords(3501), voiceId: "Joanna" });
 
     expect(response.status).toBe(422);
     expect(response.body.error.code).toBe("validation_error");

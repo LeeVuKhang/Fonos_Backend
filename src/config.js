@@ -20,8 +20,8 @@ const environmentSchema = z.object({
   AWS_REGION: z.string().trim().min(1).default("us-east-1"),
   S3_BUCKET: optionalNonEmptyString,
   AWS_BUCKET_NAME: optionalNonEmptyString,
-  POLLY_ENGINE: z.literal("neural").default("neural"),
-  MAX_CHAPTER_TEXT_CHARS: z.coerce.number().int().min(1).max(4000).default(4000),
+  POLLY_ENGINE: z.enum(["neural", "long-form", "generative"]).default("long-form"),
+  MAX_CHAPTER_TEXT_WORDS: z.coerce.number().int().min(1).max(3500).default(3500),
 }).superRefine((value, context) => {
   if (!value.S3_BUCKET && !value.AWS_BUCKET_NAME) {
     context.addIssue({
@@ -49,6 +49,6 @@ export function loadConfig(environment = process.env) {
     awsRegion: value.AWS_REGION,
     s3Bucket: value.S3_BUCKET ?? value.AWS_BUCKET_NAME,
     pollyEngine: value.POLLY_ENGINE,
-    maxChapterTextChars: value.MAX_CHAPTER_TEXT_CHARS,
+    maxChapterTextWords: value.MAX_CHAPTER_TEXT_WORDS,
   });
 }

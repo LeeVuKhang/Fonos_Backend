@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+export const MAX_CHAPTER_TEXT_WORDS = 3500;
+
+export function countWords(value) {
+  if (typeof value !== "string") {
+    return 0;
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? 0 : trimmed.split(/\s+/u).length;
+}
+
 const optionalUrl = z.preprocess(
   (value) => {
     if (typeof value !== "string") {
@@ -17,7 +27,13 @@ export const createAudiobookSchema = z
     author: z.string().trim().min(1, "Author is required").max(120),
     coverUrl: optionalUrl,
     chapterTitle: z.string().trim().min(1).max(120).optional().default("Chapter 1"),
-    chapterText: z.string().trim().min(1, "Chapter text is required").max(4000),
+    chapterText: z
+      .string()
+      .trim()
+      .min(1, "Chapter text is required")
+      .refine((value) => countWords(value) <= MAX_CHAPTER_TEXT_WORDS, {
+        message: `Chapter text must be ${MAX_CHAPTER_TEXT_WORDS} words or fewer`,
+      }),
     languageCode: z.literal("en-US").optional().default("en-US"),
     voiceId: z.enum(["Matthew", "Ruth"]),
   })
