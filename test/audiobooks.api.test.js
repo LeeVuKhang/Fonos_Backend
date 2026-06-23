@@ -11,7 +11,7 @@ const validDraft = {
   chapterTitle: "Chapter 1",
   chapterText: "Text to synthesize.",
   languageCode: "en-US",
-  voiceId: "Matthew",
+  voiceId: "Patrick",
 };
 
 function repeatedWords(count) {

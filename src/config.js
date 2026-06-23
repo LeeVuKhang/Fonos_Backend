@@ -1,33 +1,21 @@
 import "dotenv/config";
 import { z } from "zod";
 
-const optionalNonEmptyString = z.preprocess(
-  (value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed.length === 0 ? undefined : trimmed;
-  },
-  z.string().min(1).optional(),
-);
-
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().trim().min(1).default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   FIREBASE_PROJECT_ID: z.string().trim().min(1),
   AWS_REGION: z.string().trim().min(1).default("us-east-1"),
-  S3_BUCKET: optionalNonEmptyString,
-  AWS_BUCKET_NAME: optionalNonEmptyString,
-  POLLY_ENGINE: z.enum(["neural", "long-form", "generative"]).default("long-form"),
+  S3_BUCKET: z.string().trim().min(1),
+  POLLY_TASK_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(2000),
   MAX_CHAPTER_TEXT_WORDS: z.coerce.number().int().min(1).max(3500).default(3500),
 }).superRefine((value, context) => {
-  if (!value.S3_BUCKET && !value.AWS_BUCKET_NAME) {
+  if (value.AWS_REGION !== "us-east-1") {
     context.addIssue({
       code: "custom",
-      path: ["S3_BUCKET"],
-      message: "S3_BUCKET or AWS_BUCKET_NAME is required",
+      path: ["AWS_REGION"],
+      message: "Long-form Polly requires AWS_REGION=us-east-1",
     });
   }
 });
@@ -47,8 +35,8 @@ export function loadConfig(environment = process.env) {
     port: value.PORT,
     firebaseProjectId: value.FIREBASE_PROJECT_ID,
     awsRegion: value.AWS_REGION,
-    s3Bucket: value.S3_BUCKET ?? value.AWS_BUCKET_NAME,
-    pollyEngine: value.POLLY_ENGINE,
+    s3Bucket: value.S3_BUCKET,
+    pollyTaskPollIntervalMs: value.POLLY_TASK_POLL_INTERVAL_MS,
     maxChapterTextWords: value.MAX_CHAPTER_TEXT_WORDS,
   });
 }

@@ -1,80 +1,97 @@
-import { SynthesizeSpeechCommand } from "@aws-sdk/client-polly";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  GetSpeechSynthesisTaskCommand,
+  StartSpeechSynthesisTaskCommand,
+} from "@aws-sdk/client-polly";
 
-async function audioStreamToBuffer(audioStream) {
-  if (!audioStream) {
-    throw new Error("Polly did not return an audio stream");
+export const POLLY_ENGINE = "long-form";
+
+function requireSynthesisTask(response) {
+  if (!response?.SynthesisTask) {
+    throw new Error("Polly did not return a synthesis task");
   }
-  if (typeof audioStream.transformToByteArray === "function") {
-    return Buffer.from(await audioStream.transformToByteArray());
+  return response.SynthesisTask;
+}
+
+function decodeS3Path(pathname) {
+  try {
+    return pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+  } catch {
+    throw new Error("Polly returned an invalid S3 output URI");
   }
-  if (Symbol.asyncIterator in Object(audioStream)) {
-    const chunks = [];
-    for await (const chunk of audioStream) {
-      chunks.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
-  }
-  throw new Error("Polly returned an unsupported audio stream");
 }
 
 export class AwsAudioService {
-  constructor({ pollyClient, s3Client, bucket, region }) {
+  constructor({ pollyClient, bucket }) {
     this.pollyClient = pollyClient;
-    this.s3Client = s3Client;
     this.bucket = bucket;
-    this.region = region;
   }
 
-  async synthesizeSpeech({ text, voiceId, languageCode, engine }) {
-    // Escape XML special characters for SSML
-    const escaped = text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&apos;");
-
-    // Split into paragraphs, then sentences, and wrap with <p>/<s> tags
-    const paragraphs = escaped.split(/\n\n+/).filter((p) => p.trim());
-    const ssmlBody = paragraphs
-      .map((para) => {
-        // Split on sentence-ending punctuation followed by whitespace
-        const sentences = para
-          .split(/(?<=[.!?])\s+/)
-          .filter((s) => s.trim())
-          .map((s) => `<s>${s.trim()}</s><break time="800ms"/>`)
-          .join("\n        ");
-        return `<p>\n        ${sentences}\n      </p>`;
-      })
-      .join('\n      <break time="1100ms"/>\n      ');
-
-    const ssml = `<speak>\n  <prosody rate="65%">\n      ${ssmlBody}\n  </prosody>\n</speak>`;
-
+  async startSynthesisTask({ chapterText, voiceId, creatorUid, bookId, chapterId }) {
+    const normalizedText = chapterText.replace(/\r\n?/g, "\n").trim();
+    const outputPrefix = `audiobooks/${creatorUid}/${bookId}/${chapterId}/`;
     const response = await this.pollyClient.send(
-      new SynthesizeSpeechCommand({
-        Text: ssml,
-        TextType: "ssml",
+      new StartSpeechSynthesisTaskCommand({
+        Text: normalizedText,
+        TextType: "text",
         VoiceId: voiceId,
-        LanguageCode: languageCode,
-        Engine: engine,
+        Engine: POLLY_ENGINE,
         OutputFormat: "mp3",
         SampleRate: "24000",
+        OutputS3BucketName: this.bucket,
+        OutputS3KeyPrefix: outputPrefix,
       }),
     );
-    return audioStreamToBuffer(response.AudioStream);
+    return requireSynthesisTask(response);
   }
 
-  async uploadAudio({ key, body, contentType }) {
-    await this.s3Client.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: body,
-        ContentType: contentType,
-      }),
+  async getSynthesisTask(taskId) {
+    const response = await this.pollyClient.send(
+      new GetSpeechSynthesisTaskCommand({ TaskId: taskId }),
     );
-    const encodedKey = key.split("/").map(encodeURIComponent).join("/");
-    return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${encodedKey}`;
+    return requireSynthesisTask(response);
+  }
+
+  resolveS3Output({ outputUri, expectedPrefix }) {
+    let url;
+    try {
+      url = new URL(outputUri);
+    } catch {
+      throw new Error("Polly returned an invalid S3 output URI");
+    }
+
+    const hostname = url.hostname.toLowerCase();
+    const bucketName = this.bucket.toLowerCase();
+    const decodedPath = decodeS3Path(url.pathname);
+    let s3Key;
+
+    if (hostname.startsWith(`${bucketName}.s3.`) || hostname === `${bucketName}.s3.amazonaws.com`) {
+      s3Key = decodedPath;
+    } else if (
+      hostname === "s3.amazonaws.com" ||
+      hostname.startsWith("s3.") ||
+      hostname.startsWith("s3-")
+    ) {
+      const [uriBucket, ...keyParts] = decodedPath.split("/");
+      if (uriBucket !== this.bucket) {
+        throw new Error("Polly OutputUri S3 bucket does not match configured bucket");
+      }
+      s3Key = keyParts.join("/");
+    } else {
+      throw new Error("Polly OutputUri S3 bucket does not match configured bucket");
+    }
+
+    if (!s3Key.startsWith(expectedPrefix)) {
+      throw new Error("Polly OutputUri S3 key prefix does not match the requested prefix");
+    }
+
+    return {
+      audioUrl: outputUri,
+      s3Key,
+      audioStoragePath: `s3://${this.bucket}/${s3Key}`,
+    };
   }
 }

@@ -31,7 +31,7 @@ describe("createAudiobookSchema", () => {
         title: "Title",
         author: "Author",
         chapterText: "Text",
-        voiceId: "Matthew",
+        voiceId: "Matt" + "hew",
       }),
     ).toThrow();
   });

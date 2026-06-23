@@ -7,7 +7,8 @@ Demo Node.js + Express backend for user-generated audiobooks in the Android emul
 - Verifies Firebase ID tokens from Android.
 - Creates trusted Firestore `books/{bookId}` and `chapters/chapter_1` documents.
 - Queues one in-process AWS Polly generation job at a time.
-- Uploads generated MP3 audio to S3 and writes a stable public `audioUrl` back to Firestore.
+- Starts Amazon Polly Long-form tasks that write one MP3 directly to S3, then
+  polls task status and writes the returned `audioUrl` back to Firestore.
 
 Generated books remain `published=false` and move to `ready_for_review` for creator preview only.
 
@@ -41,7 +42,14 @@ Required AWS actions for the backend identity:
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": "polly:SynthesizeSpeech", "Resource": "*" },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "polly:StartSpeechSynthesisTask",
+        "polly:GetSpeechSynthesisTask"
+      ],
+      "Resource": "*"
+    },
     {
       "Effect": "Allow",
       "Action": "s3:PutObject",
@@ -68,7 +76,9 @@ For the demo bucket, make only `audiobooks/*` public-read with a bucket policy l
 }
 ```
 
-The upload code does not set an object ACL. Public playback depends on the bucket policy above.
+The S3 bucket must be in `us-east-1`. Polly writes directly under
+`audiobooks/{creatorUid}/{bookId}/{chapterId}/`; the backend never downloads or
+manually uploads an MP3. Public playback depends on the bucket policy above.
 
 ## API
 
@@ -97,7 +107,7 @@ Creates a draft and `chapter_1`.
   "chapterTitle": "Chapter 1",
   "chapterText": "Text to synthesize. Max 3500 words.",
   "languageCode": "en-US",
-  "voiceId": "Matthew"
+  "voiceId": "Patrick"
 }
 ```
 
@@ -106,6 +116,20 @@ Returns `201 Created` with `Location: /api/v1/audiobooks/{bookId}`.
 ### `POST /api/v1/audiobooks/{bookId}/generation-jobs`
 
 Transitions an owned `draft` or `failed` audiobook to `pending_generation`, returns `202 Accepted`, then processes Polly/S3 work in the background.
+
+The worker uses fixed synthesis settings: `us-east-1`, Long-form, plain text,
+MP3 at 24 kHz, with either `Ruth` (female) or `Patrick` (male). Android does not
+send AWS, engine, output, markup, or S3 configuration.
+
+On completion Polly may return an output such as:
+
+```text
+audioUrl: https://s3.us-east-1.amazonaws.com/demo-bucket/audiobooks/user-1/book-1/chapter_1/task-123.mp3
+s3Key:    audiobooks/user-1/book-1/chapter_1/task-123.mp3
+```
+
+The filename is taken from Polly's actual `OutputUri`; it is never assumed by
+the backend.
 
 ## Verification
 

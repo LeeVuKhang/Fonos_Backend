@@ -51,6 +51,9 @@ export class FirestoreAudiobookRepository {
       generationStatus: draft.generationStatus,
       pollyVoiceId: draft.pollyVoiceId,
       voiceGender: draft.voiceGender,
+      pollyTaskId: null,
+      pollyTaskStatus: null,
+      pollyOutputUri: null,
       createdAt: timestamp,
       updatedAt: timestamp,
       generationError: null,
@@ -95,6 +98,9 @@ export class FirestoreAudiobookRepository {
           generationStatus: "pending_generation",
           published: false,
           generationError: null,
+          pollyTaskId: null,
+          pollyTaskStatus: null,
+          pollyOutputUri: null,
           updatedAt: timestamp,
         },
         { merge: true },
@@ -124,7 +130,27 @@ export class FirestoreAudiobookRepository {
       languageCode: book.languageCode ?? "en-US",
       pollyVoiceId: chapter.pollyVoiceId ?? book.pollyVoiceId,
       generationStatus: book.generationStatus,
+      pollyTaskId: chapter.pollyTaskId ?? null,
+      pollyTaskStatus: chapter.pollyTaskStatus ?? null,
+      pollyOutputUri: chapter.pollyOutputUri ?? null,
     };
+  }
+
+  async savePollyTaskMetadata(bookId, metadata) {
+    const bookRef = this.bookRef(bookId);
+    const chapterRef = this.chapterRef(bookId);
+    return this.firestore.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(bookRef);
+      if (!snapshot.exists) {
+        return false;
+      }
+      transaction.set(
+        chapterRef,
+        { ...metadata, updatedAt: this.serverTimestamp() },
+        { merge: true },
+      );
+      return true;
+    });
   }
 
   async markReady(bookId, audio) {
@@ -148,7 +174,7 @@ export class FirestoreAudiobookRepository {
     );
   }
 
-  async markFailed(bookId, generationError) {
+  async markFailed(bookId, generationError, pollyTaskMetadata) {
     const timestamp = this.serverTimestamp();
     const state = {
       generationStatus: "failed",
@@ -159,7 +185,7 @@ export class FirestoreAudiobookRepository {
     return this.updateGenerationStateIfBookExists(
       bookId,
       { ...state, reviewStatus: "pending" },
-      state,
+      { ...state, ...(pollyTaskMetadata ?? {}) },
     );
   }
 

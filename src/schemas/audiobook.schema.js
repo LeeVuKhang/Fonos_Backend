@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const MAX_CHAPTER_TEXT_WORDS = 3500;
+export const POLLY_VOICES = Object.freeze(["Ruth", "Patrick"]);
 
 export function countWords(value) {
   if (typeof value !== "string") {
@@ -35,7 +36,7 @@ export const createAudiobookSchema = z
         message: `Chapter text must be ${MAX_CHAPTER_TEXT_WORDS} words or fewer`,
       }),
     languageCode: z.literal("en-US").optional().default("en-US"),
-    voiceId: z.enum(["Matthew", "Ruth"]),
+    voiceId: z.enum(POLLY_VOICES),
   })
   .strip()
   .transform((value) => ({ ...value, coverUrl: value.coverUrl ?? null }));

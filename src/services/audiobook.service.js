@@ -1,4 +1,4 @@
-const VOICE_GENDERS = Object.freeze({ Matthew: "male", Ruth: "female" });
+const VOICE_GENDERS = Object.freeze({ Ruth: "female", Patrick: "male" });
 
 export class AudiobookService {
   constructor({ repository, queue }) {

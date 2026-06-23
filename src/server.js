@@ -23,12 +23,11 @@ async function main() {
   const awsService = new AwsAudioService({
     ...awsClients,
     bucket: config.s3Bucket,
-    region: config.awsRegion,
   });
   const generationService = new GenerationService({
     repository,
     awsService,
-    engine: config.pollyEngine,
+    pollIntervalMs: config.pollyTaskPollIntervalMs,
     logger,
   });
   const queue = new GenerationQueue({
