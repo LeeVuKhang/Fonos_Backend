@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createAudiobookSchema } from "../src/schemas/audiobook.schema.js";
+import { POLLY_VOICES, createAudiobookSchema } from "../src/schemas/audiobook.schema.js";
 
 describe("createAudiobookSchema", () => {
   it("trims input and applies optional defaults", () => {
@@ -9,7 +9,7 @@ describe("createAudiobookSchema", () => {
       author: " Author ",
       coverUrl: "",
       chapterText: " Text ",
-      voiceId: "Matthew",
+      voiceId: "Patrick",
       creatorUid: "attacker",
     });
 
@@ -20,7 +20,19 @@ describe("createAudiobookSchema", () => {
       chapterTitle: "Chapter 1",
       chapterText: "Text",
       languageCode: "en-US",
-      voiceId: "Matthew",
+      voiceId: "Patrick",
     });
+  });
+
+  it("allows only Ruth and Patrick", () => {
+    expect(POLLY_VOICES).toEqual(["Ruth", "Patrick"]);
+    expect(() =>
+      createAudiobookSchema.parse({
+        title: "Title",
+        author: "Author",
+        chapterText: "Text",
+        voiceId: "Matthew",
+      }),
+    ).toThrow();
   });
 });

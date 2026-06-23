@@ -8,7 +8,7 @@ const validEnv = {
   FIREBASE_PROJECT_ID: "fonos-demo",
   AWS_REGION: "us-east-1",
   S3_BUCKET: "fonos-demo-audio",
-  POLLY_ENGINE: "long-form",
+  POLLY_TASK_POLL_INTERVAL_MS: "2000",
   MAX_CHAPTER_TEXT_WORDS: "3500",
 };
 
@@ -23,7 +23,7 @@ describe("loadConfig", () => {
       firebaseProjectId: "fonos-demo",
       awsRegion: "us-east-1",
       s3Bucket: "fonos-demo-audio",
-      pollyEngine: "long-form",
+      pollyTaskPollIntervalMs: 2000,
       maxChapterTextWords: 3500,
     });
   });
@@ -35,11 +35,18 @@ describe("loadConfig", () => {
     );
   });
 
-  it("accepts AWS_BUCKET_NAME as the S3 bucket alias", () => {
-    const { S3_BUCKET: _s3Bucket, ...envWithoutS3Bucket } = validEnv;
-
-    expect(loadConfig({ ...envWithoutS3Bucket, AWS_BUCKET_NAME: "alias-bucket" }).s3Bucket).toBe(
-      "alias-bucket",
+  it("fails fast outside the only region supported by this long-form demo", () => {
+    expect(() => loadConfig({ ...validEnv, AWS_REGION: "ap-southeast-1" })).toThrow(
+      "Long-form Polly requires AWS_REGION=us-east-1",
     );
+  });
+
+  it("uses a 2000ms polling default and validates configured intervals", () => {
+    const { POLLY_TASK_POLL_INTERVAL_MS: _interval, ...envWithoutInterval } = validEnv;
+
+    expect(loadConfig(envWithoutInterval).pollyTaskPollIntervalMs).toBe(2000);
+    expect(() =>
+      loadConfig({ ...validEnv, POLLY_TASK_POLL_INTERVAL_MS: "0" }),
+    ).toThrow("POLLY_TASK_POLL_INTERVAL_MS");
   });
 });

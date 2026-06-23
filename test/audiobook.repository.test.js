@@ -111,7 +111,7 @@ describe("FirestoreAudiobookRepository", () => {
       contentSample: "Full source",
       languageCode: "en-US",
       voiceGender: "male",
-      pollyVoiceId: "Matthew",
+      pollyVoiceId: "Patrick",
     });
 
     expect(bookId).toBe("generated-book");
@@ -128,6 +128,9 @@ describe("FirestoreAudiobookRepository", () => {
       published: false,
       generationStatus: "draft",
       createdAt: "SERVER_TIMESTAMP",
+      pollyTaskId: null,
+      pollyTaskStatus: null,
+      pollyOutputUri: null,
     });
   });
 
@@ -149,6 +152,54 @@ describe("FirestoreAudiobookRepository", () => {
       code: "invalid_generation_state",
     });
     expect(state.books.get("book-1").generationStatus).toBe("pending_generation");
+  });
+
+  it("clears old task metadata when retrying a failed generation", async () => {
+    const state = createFirestore({
+      "book-1": { creatorUid: "user-1", generationStatus: "failed", createdByUser: true },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      pollyTaskId: "old-task",
+      pollyTaskStatus: "failed",
+      pollyOutputUri: "https://example.com/old.mp3",
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await repository.transitionToPending("book-1", "user-1");
+
+    expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+      generationStatus: "pending_generation",
+      pollyTaskId: null,
+      pollyTaskStatus: null,
+      pollyOutputUri: null,
+    });
+  });
+
+  it("stores Polly task metadata on the chapter only", async () => {
+    const state = createFirestore({
+      "book-1": { creatorUid: "user-1", generationStatus: "pending_generation", createdByUser: true },
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await repository.savePollyTaskMetadata("book-1", {
+      pollyTaskId: "task-123",
+      pollyTaskStatus: "inProgress",
+      pollyOutputUri: "https://example.com/task.mp3",
+    });
+
+    expect(state.books.get("book-1")).not.toHaveProperty("pollyTaskId");
+    expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+      pollyTaskId: "task-123",
+      pollyTaskStatus: "inProgress",
+      pollyOutputUri: "https://example.com/task.mp3",
+      updatedAt: "SERVER_TIMESTAMP",
+    });
   });
 
   it("rejects missing books and the wrong owner", async () => {
@@ -181,6 +232,9 @@ describe("FirestoreAudiobookRepository", () => {
       audioUrl: "https://example.com/audio.mp3",
       s3Key: "audio.mp3",
       audioStoragePath: "audio.mp3",
+      pollyTaskId: "task-123",
+      pollyTaskStatus: "completed",
+      pollyOutputUri: "https://example.com/audio.mp3",
     });
     expect(state.books.get("book-1")).toMatchObject({
       generationStatus: "ready_for_review",
@@ -191,14 +245,23 @@ describe("FirestoreAudiobookRepository", () => {
       generationStatus: "ready_for_review",
       audioUrl: "https://example.com/audio.mp3",
       s3Key: "audio.mp3",
+      audioStoragePath: "audio.mp3",
+      pollyTaskId: "task-123",
+      pollyTaskStatus: "completed",
       published: false,
     });
 
-    await repository.markFailed("book-1", "Safe error");
+    await repository.markFailed("book-1", "Safe error", {
+      pollyTaskId: "task-456",
+      pollyTaskStatus: "failed",
+      pollyOutputUri: null,
+    });
     expect(state.books.get("book-1")).toMatchObject({ generationStatus: "failed", generationError: "Safe error" });
     expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
       generationStatus: "failed",
       generationError: "Safe error",
+      pollyTaskId: "task-456",
+      pollyTaskStatus: "failed",
     });
   });
 
@@ -229,13 +292,16 @@ describe("FirestoreAudiobookRepository", () => {
         creatorUid: "user-1",
         generationStatus: "pending_generation",
         languageCode: "en-US",
-        pollyVoiceId: "Matthew",
+        pollyVoiceId: "Patrick",
         createdByUser: true,
       },
     });
     state.chapters.set("books/book-1/chapters/chapter_1", {
       sourceText: "Chapter text",
       pollyVoiceId: "Ruth",
+      pollyTaskId: "task-123",
+      pollyTaskStatus: "scheduled",
+      pollyOutputUri: "https://example.com/task.mp3",
     });
     const repository = new FirestoreAudiobookRepository({
       firestore: state.firestore,
@@ -250,6 +316,9 @@ describe("FirestoreAudiobookRepository", () => {
       languageCode: "en-US",
       pollyVoiceId: "Ruth",
       generationStatus: "pending_generation",
+      pollyTaskId: "task-123",
+      pollyTaskStatus: "scheduled",
+      pollyOutputUri: "https://example.com/task.mp3",
     });
   });
 
@@ -259,14 +328,14 @@ describe("FirestoreAudiobookRepository", () => {
         creatorUid: "user-1",
         generationStatus: "draft",
         languageCode: "en-US",
-        pollyVoiceId: "Matthew",
+        pollyVoiceId: "Patrick",
         createdByUser: true,
       },
       "book-2": {
         creatorUid: "user-1",
         generationStatus: "pending_generation",
         languageCode: "en-US",
-        pollyVoiceId: "Matthew",
+        pollyVoiceId: "Patrick",
         createdByUser: true,
       },
     });
