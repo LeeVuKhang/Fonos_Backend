@@ -3,6 +3,8 @@ import { forbidden, invalidGenerationState, notFound } from "../errors.js";
 const BOOKS = "books";
 const CHAPTERS = "chapters";
 const CHAPTER_ID = "chapter_1";
+const USERS = "users";
+const NOTIFICATION_TOKENS = "notificationTokens";
 
 export class FirestoreAudiobookRepository {
   constructor({ firestore, serverTimestamp }) {
@@ -16,6 +18,10 @@ export class FirestoreAudiobookRepository {
 
   chapterRef(bookId) {
     return this.bookRef(bookId).collection(CHAPTERS).doc(CHAPTER_ID);
+  }
+
+  notificationTokensRef(creatorUid) {
+    return this.firestore.collection(USERS).doc(creatorUid).collection(NOTIFICATION_TOKENS);
   }
 
   async createDraft(draft) {
@@ -125,6 +131,7 @@ export class FirestoreAudiobookRepository {
     return {
       bookId,
       creatorUid: book.creatorUid,
+      title: book.title ?? "Untitled",
       chapterId: CHAPTER_ID,
       sourceText: chapter.sourceText,
       languageCode: book.languageCode ?? "en-US",
@@ -213,5 +220,19 @@ export class FirestoreAudiobookRepository {
       bookId: document.id,
       creatorUid: document.data().creatorUid,
     }));
+  }
+
+  async listNotificationTokens(creatorUid) {
+    const snapshot = await this.notificationTokensRef(creatorUid).get();
+    return snapshot.docs
+      .map((document) => ({
+        id: document.id,
+        token: document.data()?.token,
+      }))
+      .filter((record) => typeof record.token === "string" && record.token.trim() !== "");
+  }
+
+  async deleteNotificationToken(creatorUid, tokenId) {
+    await this.notificationTokensRef(creatorUid).doc(tokenId).delete();
   }
 }

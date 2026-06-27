@@ -19,6 +19,7 @@ function generationInput(overrides = {}) {
   return {
     bookId: "book-1",
     creatorUid: "user-1",
+    title: "Demo Book",
     chapterId: "chapter_1",
     sourceText: "Hello audiobook",
     pollyVoiceId: "Patrick",
@@ -140,6 +141,136 @@ describe("GenerationService", () => {
     expect(repository.markReady).toHaveBeenCalledWith(
       "book-1",
       expect.objectContaining({ pollyTaskId: "existing-task", pollyTaskStatus: "completed" }),
+    );
+  });
+
+  it("sends a ready notification after the terminal Firestore write succeeds", async () => {
+    const repository = createRepository();
+    const notificationService = {
+      notifyGenerationStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const awsService = {
+      startSynthesisTask: vi.fn().mockResolvedValue({
+        TaskId: "task-123",
+        TaskStatus: "completed",
+        OutputUri: OUTPUT_URI,
+      }),
+      getSynthesisTask: vi.fn(),
+      resolveS3Output: vi.fn().mockReturnValue(OUTPUT),
+    };
+    const service = new GenerationService({
+      repository,
+      awsService,
+      pollIntervalMs: 2000,
+      sleep: vi.fn(),
+      logger: createLogger(),
+      notificationService,
+    });
+
+    await service.process({ bookId: "book-1", creatorUid: "user-1" });
+
+    expect(notificationService.notifyGenerationStatus).toHaveBeenCalledWith({
+      bookId: "book-1",
+      creatorUid: "user-1",
+      title: "Demo Book",
+      generationStatus: "ready_for_review",
+    });
+  });
+
+  it("sends a failed notification after Polly reports a failed task", async () => {
+    const repository = createRepository();
+    const notificationService = {
+      notifyGenerationStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const awsService = {
+      startSynthesisTask: vi.fn().mockResolvedValue({
+        TaskId: "task-123",
+        TaskStatus: "failed",
+        OutputUri: OUTPUT_URI,
+        TaskStatusReason: "Polly failed safely",
+      }),
+      getSynthesisTask: vi.fn(),
+      resolveS3Output: vi.fn(),
+    };
+    const service = new GenerationService({
+      repository,
+      awsService,
+      pollIntervalMs: 2000,
+      sleep: vi.fn(),
+      logger: createLogger(),
+      notificationService,
+    });
+
+    await service.process({ bookId: "book-1", creatorUid: "user-1" });
+
+    expect(notificationService.notifyGenerationStatus).toHaveBeenCalledWith({
+      bookId: "book-1",
+      creatorUid: "user-1",
+      title: "Demo Book",
+      generationStatus: "failed",
+    });
+  });
+
+  it("skips notifications when a completed book was deleted before the terminal write", async () => {
+    const repository = createRepository();
+    repository.markReady.mockResolvedValue(false);
+    const notificationService = {
+      notifyGenerationStatus: vi.fn(),
+    };
+    const awsService = {
+      startSynthesisTask: vi.fn().mockResolvedValue({
+        TaskId: "task-123",
+        TaskStatus: "completed",
+        OutputUri: OUTPUT_URI,
+      }),
+      getSynthesisTask: vi.fn(),
+      resolveS3Output: vi.fn().mockReturnValue(OUTPUT),
+    };
+    const service = new GenerationService({
+      repository,
+      awsService,
+      pollIntervalMs: 2000,
+      sleep: vi.fn(),
+      logger: createLogger(),
+      notificationService,
+    });
+
+    await service.process({ bookId: "book-1", creatorUid: "user-1" });
+
+    expect(notificationService.notifyGenerationStatus).not.toHaveBeenCalled();
+  });
+
+  it("logs and swallows notification failures without failing a completed job", async () => {
+    const repository = createRepository();
+    const logger = createLogger();
+    const notificationService = {
+      notifyGenerationStatus: vi.fn().mockRejectedValue(new Error("FCM unavailable")),
+    };
+    const awsService = {
+      startSynthesisTask: vi.fn().mockResolvedValue({
+        TaskId: "task-123",
+        TaskStatus: "completed",
+        OutputUri: OUTPUT_URI,
+      }),
+      getSynthesisTask: vi.fn(),
+      resolveS3Output: vi.fn().mockReturnValue(OUTPUT),
+    };
+    const service = new GenerationService({
+      repository,
+      awsService,
+      pollIntervalMs: 2000,
+      sleep: vi.fn(),
+      logger,
+      notificationService,
+    });
+
+    await service.process({ bookId: "book-1", creatorUid: "user-1" });
+
+    expect(repository.markReady).toHaveBeenCalled();
+    expect(repository.markFailed).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ bookId: "book-1", creatorUid: "user-1" }),
+      "Failed to send generation notification",
     );
   });
 

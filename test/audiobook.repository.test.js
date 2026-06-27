@@ -290,6 +290,7 @@ describe("FirestoreAudiobookRepository", () => {
     const state = createFirestore({
       "book-1": {
         creatorUid: "user-1",
+        title: "Title",
         generationStatus: "pending_generation",
         languageCode: "en-US",
         pollyVoiceId: "Patrick",
@@ -311,6 +312,7 @@ describe("FirestoreAudiobookRepository", () => {
     await expect(repository.getGenerationInput("book-1")).resolves.toEqual({
       bookId: "book-1",
       creatorUid: "user-1",
+      title: "Title",
       chapterId: "chapter_1",
       sourceText: "Chapter text",
       languageCode: "en-US",

@@ -9,6 +9,8 @@ Demo Node.js + Express backend for user-generated audiobooks in the Android emul
 - Queues one in-process AWS Polly generation job at a time.
 - Starts Amazon Polly Long-form tasks that write one MP3 directly to S3, then
   polls task status and writes the returned `audioUrl` back to Firestore.
+- Sends best-effort FCM data notifications when generation reaches
+  `ready_for_review` or `failed`.
 
 Generated books remain `published=false` and move to `ready_for_review` for creator preview only.
 
@@ -33,6 +35,12 @@ http://10.0.2.2:8080
 ## Required Firebase/AWS configuration
 
 Firebase Admin uses Application Default Credentials from `GOOGLE_APPLICATION_CREDENTIALS` and derives `creatorUid` from the verified ID token. The backend ignores client-supplied identity fields.
+
+Android stores FCM registration tokens under
+`users/{uid}/notificationTokens/{sha256Token}`. Firestore rules must allow
+authenticated users to write/delete only their own token documents. The backend
+uses Firebase Admin Messaging to send data-only, high-priority generation
+status messages and removes invalid or unregistered tokens.
 
 AWS uses the normal SDK credential chain; for local demo use `AWS_PROFILE=default` or another local profile.
 
@@ -130,6 +138,20 @@ s3Key:    audiobooks/user-1/book-1/chapter_1/task-123.mp3
 
 The filename is taken from Polly's actual `OutputUri`; it is never assumed by
 the backend.
+
+After `ready_for_review` or `failed` is persisted, the backend sends a
+best-effort FCM payload:
+
+```text
+type: audiobook_generation_status
+bookId: {bookId}
+generationStatus: ready_for_review | failed
+title: {book title}
+clickTarget: my_uploads
+```
+
+The payload excludes source chapter text and `generationError`; notification
+delivery failure is logged but does not fail the generation job.
 
 ## Verification
 

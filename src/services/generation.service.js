@@ -45,18 +45,36 @@ export function sanitizeTaskStatusReason(reason, sourceText) {
 }
 
 export class GenerationService {
-  constructor({ repository, awsService, pollIntervalMs, logger, sleep = defaultSleep }) {
+  constructor({
+    repository,
+    awsService,
+    pollIntervalMs,
+    logger,
+    sleep = defaultSleep,
+    notificationService,
+  }) {
     this.repository = repository;
     this.awsService = awsService;
     this.pollIntervalMs = pollIntervalMs;
     this.logger = logger;
     this.sleep = sleep;
+    this.notificationService = notificationService;
   }
 
   async process(job) {
     let failureMetadata;
+    let notificationInput = {
+      bookId: job.bookId,
+      creatorUid: job.creatorUid,
+      title: "Untitled",
+    };
     try {
       const input = await this.repository.getGenerationInput(job.bookId);
+      notificationInput = {
+        bookId: input.bookId,
+        creatorUid: input.creatorUid,
+        title: input.title,
+      };
       const expectedPrefix =
         `audiobooks/${input.creatorUid}/${input.bookId}/${input.chapterId}/`;
       this.logger?.info?.(
@@ -129,6 +147,7 @@ export class GenerationService {
             { bookId: input.bookId, creatorUid: input.creatorUid, chapterId: input.chapterId },
             "Audiobook generation completed",
           );
+          await this.notifyGenerationStatus(notificationInput, "ready_for_review");
           return;
         }
 
@@ -144,6 +163,8 @@ export class GenerationService {
           );
           if (persisted === false) {
             this.logger?.warn?.({ bookId: input.bookId }, "Skipped failure state for deleted audiobook");
+          } else {
+            await this.notifyGenerationStatus(notificationInput, "failed");
           }
           return;
         }
@@ -159,6 +180,8 @@ export class GenerationService {
         );
         if (persisted === false) {
           this.logger?.warn?.({ bookId: job.bookId }, "Skipped failure state for deleted audiobook");
+        } else {
+          await this.notifyGenerationStatus(notificationInput, "failed");
         }
       } catch (writeError) {
         this.logger?.error?.({ err: writeError, bookId: job.bookId }, "Failed to persist job failure");
@@ -168,6 +191,23 @@ export class GenerationService {
         "Audiobook generation failed",
       );
       throw error;
+    }
+  }
+
+  async notifyGenerationStatus(input, generationStatus) {
+    if (!this.notificationService) {
+      return;
+    }
+    try {
+      await this.notificationService.notifyGenerationStatus({
+        ...input,
+        generationStatus,
+      });
+    } catch (error) {
+      this.logger?.warn?.(
+        { err: error, bookId: input?.bookId, creatorUid: input?.creatorUid, generationStatus },
+        "Failed to send generation notification",
+      );
     }
   }
 }

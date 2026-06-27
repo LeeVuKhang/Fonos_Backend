@@ -9,6 +9,7 @@ import { FirestoreAudiobookRepository } from "./repositories/audiobook.repositor
 import { AudiobookService } from "./services/audiobook.service.js";
 import { AwsAudioService } from "./services/aws.service.js";
 import { GenerationService } from "./services/generation.service.js";
+import { GenerationNotificationService } from "./services/generationNotification.service.js";
 
 async function main() {
   const config = loadConfig();
@@ -24,11 +25,17 @@ async function main() {
     ...awsClients,
     bucket: config.s3Bucket,
   });
+  const notificationService = new GenerationNotificationService({
+    repository,
+    messaging: firebase.messaging,
+    logger,
+  });
   const generationService = new GenerationService({
     repository,
     awsService,
     pollIntervalMs: config.pollyTaskPollIntervalMs,
     logger,
+    notificationService,
   });
   const queue = new GenerationQueue({
     worker: (job) => generationService.process(job),
