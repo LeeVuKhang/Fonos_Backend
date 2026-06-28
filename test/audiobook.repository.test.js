@@ -178,6 +178,125 @@ describe("FirestoreAudiobookRepository", () => {
     });
   });
 
+  it("loads editable draft fields from book and chapter", async () => {
+    const state = createFirestore({
+      "book-1": {
+        creatorUid: "user-1",
+        title: "Title",
+        author: "Author",
+        coverUrl: "https://example.com/cover.jpg",
+        chapterTitle: "Book chapter",
+        languageCode: "en-US",
+        pollyVoiceId: "Patrick",
+        generationStatus: "draft",
+        createdByUser: true,
+      },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      chapterTitle: "Chapter 1",
+      sourceText: "Editable source text",
+      pollyVoiceId: "Ruth",
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(repository.getEditableDraft("book-1", "user-1")).resolves.toEqual({
+      bookId: "book-1",
+      title: "Title",
+      author: "Author",
+      coverUrl: "https://example.com/cover.jpg",
+      chapterTitle: "Chapter 1",
+      chapterText: "Editable source text",
+      languageCode: "en-US",
+      voiceId: "Ruth",
+      generationStatus: "draft",
+    });
+  });
+
+  it("updates editable drafts on both book and chapter", async () => {
+    const state = createFirestore({
+      "book-1": {
+        creatorUid: "user-1",
+        generationStatus: "draft",
+        createdByUser: true,
+      },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      sourceText: "Old text",
+      pollyTaskId: "old-task",
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(
+      repository.updateDraft("book-1", "user-1", {
+        title: "Updated",
+        author: "New Author",
+        coverUrl: null,
+        chapterTitle: "Chapter 1",
+        sourceText: "New source text",
+        contentSample: "New source text",
+        languageCode: "en-US",
+        pollyVoiceId: "Patrick",
+        voiceGender: "male",
+      }),
+    ).resolves.toEqual({ bookId: "book-1", generationStatus: "draft" });
+
+    expect(state.books.get("book-1")).toMatchObject({
+      title: "Updated",
+      author: "New Author",
+      generationStatus: "draft",
+      reviewStatus: "pending",
+      published: false,
+      updatedAt: "SERVER_TIMESTAMP",
+    });
+    expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+      sourceText: "New source text",
+      generationStatus: "draft",
+      pollyTaskId: null,
+      pollyTaskStatus: null,
+      pollyOutputUri: null,
+      updatedAt: "SERVER_TIMESTAMP",
+    });
+  });
+
+  it("rejects draft edits for missing documents, wrong owners, and non-drafts", async () => {
+    const state = createFirestore({
+      "draft": { creatorUid: "user-1", generationStatus: "draft", createdByUser: true },
+      "pending": { creatorUid: "user-1", generationStatus: "pending_generation", createdByUser: true },
+      "missing-chapter": { creatorUid: "user-1", generationStatus: "draft", createdByUser: true },
+    });
+    state.chapters.set("books/draft/chapters/chapter_1", { sourceText: "Text" });
+    state.chapters.set("books/pending/chapters/chapter_1", { sourceText: "Text" });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+    const draft = {
+      title: "Title",
+      author: "Author",
+      coverUrl: null,
+      chapterTitle: "Chapter 1",
+      sourceText: "Text",
+      contentSample: "Text",
+      languageCode: "en-US",
+      pollyVoiceId: "Patrick",
+      voiceGender: "male",
+    };
+
+    await expect(repository.getEditableDraft("missing", "user-1")).rejects.toMatchObject({ status: 404 });
+    await expect(repository.updateDraft("missing-chapter", "user-1", draft)).rejects.toMatchObject({ status: 404 });
+    await expect(repository.getEditableDraft("draft", "attacker")).rejects.toMatchObject({ status: 403 });
+    await expect(repository.updateDraft("pending", "user-1", draft)).rejects.toMatchObject({
+      status: 409,
+      code: "invalid_draft_state",
+    });
+  });
+
   it("stores Polly task metadata on the chapter only", async () => {
     const state = createFirestore({
       "book-1": { creatorUid: "user-1", generationStatus: "pending_generation", createdByUser: true },
@@ -262,6 +381,70 @@ describe("FirestoreAudiobookRepository", () => {
       generationError: "Safe error",
       pollyTaskId: "task-456",
       pollyTaskStatus: "failed",
+    });
+  });
+
+  it("publishes ready-for-review audiobooks on book and chapter", async () => {
+    const state = createFirestore({
+      "book-1": {
+        creatorUid: "user-1",
+        generationStatus: "ready_for_review",
+        published: false,
+        createdByUser: true,
+      },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      generationStatus: "ready_for_review",
+      published: false,
+      audioUrl: "https://example.com/audio.mp3",
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(repository.publish("book-1", "user-1")).resolves.toEqual({
+      bookId: "book-1",
+      generationStatus: "published",
+      published: true,
+    });
+
+    expect(state.books.get("book-1")).toMatchObject({
+      generationStatus: "published",
+      reviewStatus: "approved",
+      published: true,
+      generationError: null,
+      updatedAt: "SERVER_TIMESTAMP",
+      publishedAt: "SERVER_TIMESTAMP",
+    });
+    expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+      generationStatus: "published",
+      published: true,
+      generationError: null,
+      updatedAt: "SERVER_TIMESTAMP",
+      publishedAt: "SERVER_TIMESTAMP",
+    });
+  });
+
+  it("rejects publishing missing books, wrong owners, and non-review states", async () => {
+    const state = createFirestore({
+      "ready": { creatorUid: "user-1", generationStatus: "ready_for_review", createdByUser: true },
+      "draft": { creatorUid: "user-1", generationStatus: "draft", createdByUser: true },
+      "missing-chapter": { creatorUid: "user-1", generationStatus: "ready_for_review", createdByUser: true },
+    });
+    state.chapters.set("books/ready/chapters/chapter_1", { generationStatus: "ready_for_review" });
+    state.chapters.set("books/draft/chapters/chapter_1", { generationStatus: "draft" });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(repository.publish("missing", "user-1")).rejects.toMatchObject({ status: 404 });
+    await expect(repository.publish("missing-chapter", "user-1")).rejects.toMatchObject({ status: 404 });
+    await expect(repository.publish("ready", "attacker")).rejects.toMatchObject({ status: 403 });
+    await expect(repository.publish("draft", "user-1")).rejects.toMatchObject({
+      status: 409,
+      code: "invalid_publication_state",
     });
   });
 

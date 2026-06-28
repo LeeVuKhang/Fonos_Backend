@@ -1,4 +1,10 @@
-import { forbidden, invalidGenerationState, notFound } from "../errors.js";
+import {
+  forbidden,
+  invalidDraftEditState,
+  invalidGenerationState,
+  invalidPublicationState,
+  notFound,
+} from "../errors.js";
 
 const BOOKS = "books";
 const CHAPTERS = "chapters";
@@ -115,6 +121,86 @@ export class FirestoreAudiobookRepository {
     });
   }
 
+  async getEditableDraft(bookId, creatorUid) {
+    const [bookSnapshot, chapterSnapshot] = await Promise.all([
+      this.bookRef(bookId).get(),
+      this.chapterRef(bookId).get(),
+    ]);
+    if (!bookSnapshot.exists || !chapterSnapshot.exists) {
+      throw notFound();
+    }
+    const book = bookSnapshot.data();
+    const chapter = chapterSnapshot.data();
+    this.assertCanEditDraft(book, creatorUid);
+    return {
+      bookId,
+      title: book.title ?? "",
+      author: book.author ?? "",
+      coverUrl: book.coverUrl ?? null,
+      chapterTitle: chapter.chapterTitle ?? chapter.title ?? book.chapterTitle ?? "Chapter 1",
+      chapterText: chapter.sourceText ?? "",
+      languageCode: book.languageCode ?? "en-US",
+      voiceId: chapter.pollyVoiceId ?? book.pollyVoiceId ?? "Patrick",
+      generationStatus: book.generationStatus,
+    };
+  }
+
+  async updateDraft(bookId, creatorUid, draft) {
+    const bookRef = this.bookRef(bookId);
+    const chapterRef = this.chapterRef(bookId);
+    return this.firestore.runTransaction(async (transaction) => {
+      const [bookSnapshot, chapterSnapshot] = await Promise.all([
+        transaction.get(bookRef),
+        transaction.get(chapterRef),
+      ]);
+      if (!bookSnapshot.exists || !chapterSnapshot.exists) {
+        throw notFound();
+      }
+      const book = bookSnapshot.data();
+      this.assertCanEditDraft(book, creatorUid);
+      const timestamp = this.serverTimestamp();
+      transaction.set(
+        bookRef,
+        {
+          title: draft.title,
+          author: draft.author,
+          coverUrl: draft.coverUrl,
+          chapterTitle: draft.chapterTitle,
+          contentSample: draft.contentSample,
+          languageCode: draft.languageCode,
+          voiceGender: draft.voiceGender,
+          pollyVoiceId: draft.pollyVoiceId,
+          generationStatus: "draft",
+          reviewStatus: "pending",
+          published: false,
+          generationError: null,
+          updatedAt: timestamp,
+        },
+        { merge: true },
+      );
+      transaction.set(
+        chapterRef,
+        {
+          title: draft.chapterTitle,
+          chapterTitle: draft.chapterTitle,
+          sourceText: draft.sourceText,
+          contentSample: draft.contentSample,
+          published: false,
+          generationStatus: "draft",
+          pollyVoiceId: draft.pollyVoiceId,
+          voiceGender: draft.voiceGender,
+          pollyTaskId: null,
+          pollyTaskStatus: null,
+          pollyOutputUri: null,
+          generationError: null,
+          updatedAt: timestamp,
+        },
+        { merge: true },
+      );
+      return { bookId, generationStatus: "draft" };
+    });
+  }
+
   async getGenerationInput(bookId) {
     const [bookSnapshot, chapterSnapshot] = await Promise.all([
       this.bookRef(bookId).get(),
@@ -141,6 +227,61 @@ export class FirestoreAudiobookRepository {
       pollyTaskStatus: chapter.pollyTaskStatus ?? null,
       pollyOutputUri: chapter.pollyOutputUri ?? null,
     };
+  }
+
+  async publish(bookId, creatorUid) {
+    const bookRef = this.bookRef(bookId);
+    const chapterRef = this.chapterRef(bookId);
+    return this.firestore.runTransaction(async (transaction) => {
+      const [bookSnapshot, chapterSnapshot] = await Promise.all([
+        transaction.get(bookRef),
+        transaction.get(chapterRef),
+      ]);
+      if (!bookSnapshot.exists || !chapterSnapshot.exists) {
+        throw notFound();
+      }
+      const book = bookSnapshot.data();
+      if (book.creatorUid !== creatorUid) {
+        throw forbidden();
+      }
+      if (book.generationStatus !== "ready_for_review") {
+        throw invalidPublicationState();
+      }
+      const timestamp = this.serverTimestamp();
+      transaction.set(
+        bookRef,
+        {
+          generationStatus: "published",
+          reviewStatus: "approved",
+          published: true,
+          generationError: null,
+          updatedAt: timestamp,
+          publishedAt: timestamp,
+        },
+        { merge: true },
+      );
+      transaction.set(
+        chapterRef,
+        {
+          generationStatus: "published",
+          published: true,
+          generationError: null,
+          updatedAt: timestamp,
+          publishedAt: timestamp,
+        },
+        { merge: true },
+      );
+      return { bookId, generationStatus: "published", published: true };
+    });
+  }
+
+  assertCanEditDraft(book, creatorUid) {
+    if (book.creatorUid !== creatorUid) {
+      throw forbidden();
+    }
+    if (book.generationStatus !== "draft") {
+      throw invalidDraftEditState();
+    }
   }
 
   async savePollyTaskMetadata(bookId, metadata) {

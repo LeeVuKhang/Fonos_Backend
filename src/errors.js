@@ -26,6 +26,22 @@ export function invalidGenerationState() {
   );
 }
 
+export function invalidDraftEditState() {
+  return new AppError(
+    409,
+    "invalid_draft_state",
+    "Audiobook can only be edited while it is a draft",
+  );
+}
+
+export function invalidPublicationState() {
+  return new AppError(
+    409,
+    "invalid_publication_state",
+    "Audiobook can only be published after it is ready for review",
+  );
+}
+
 function zodDetails(error) {
   return error.issues.map((issue) => ({
     field: issue.path.join("."),

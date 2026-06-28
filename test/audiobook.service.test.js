@@ -58,6 +58,66 @@ describe("AudiobookService", () => {
     expect(result).toEqual({ bookId: "book-1", generationStatus: "pending_generation" });
   });
 
+  it("loads and updates editable drafts through the repository", async () => {
+    const repository = {
+      getEditableDraft: vi.fn().mockResolvedValue({
+        bookId: "book-1",
+        title: "Title",
+        author: "Author",
+        coverUrl: null,
+        chapterTitle: "Chapter 1",
+        chapterText: "Text",
+        languageCode: "en-US",
+        voiceId: "Ruth",
+        generationStatus: "draft",
+      }),
+      updateDraft: vi.fn().mockResolvedValue({ bookId: "book-1", generationStatus: "draft" }),
+    };
+    const queue = { enqueue: vi.fn() };
+    const service = new AudiobookService({ repository, queue });
+
+    await expect(service.getDraftForEdit("book-1", "user-1")).resolves.toMatchObject({
+      bookId: "book-1",
+      generationStatus: "draft",
+    });
+    await expect(service.updateDraft("book-1", "user-1", input)).resolves.toEqual({
+      bookId: "book-1",
+      generationStatus: "draft",
+    });
+
+    expect(repository.getEditableDraft).toHaveBeenCalledWith("book-1", "user-1");
+    expect(repository.updateDraft).toHaveBeenCalledWith(
+      "book-1",
+      "user-1",
+      expect.objectContaining({
+        sourceText: "A short chapter.",
+        pollyVoiceId: "Ruth",
+        voiceGender: "female",
+      }),
+    );
+  });
+
+  it("publishes reviewed audiobooks through the repository", async () => {
+    const repository = {
+      publish: vi.fn().mockResolvedValue({
+        bookId: "book-1",
+        generationStatus: "published",
+        published: true,
+      }),
+    };
+    const queue = { enqueue: vi.fn() };
+    const service = new AudiobookService({ repository, queue });
+
+    await expect(service.publishAudiobook("book-1", "user-1")).resolves.toEqual({
+      bookId: "book-1",
+      generationStatus: "published",
+      published: true,
+    });
+
+    expect(repository.publish).toHaveBeenCalledWith("book-1", "user-1");
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
   it("does not enqueue when ownership or state validation fails", async () => {
     const repository = {
       transitionToPending: vi.fn().mockRejectedValue(

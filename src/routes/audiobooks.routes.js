@@ -31,6 +31,25 @@ export function audiobookRoutes({
     return response.status(201).json({ data: result });
   });
 
+  router.get("/audiobooks/:bookId/draft", async (request, response) => {
+    const result = await audiobookService.getDraftForEdit(request.params.bookId, request.auth.uid);
+    return response.status(200).json({ data: result });
+  });
+
+  router.put("/audiobooks/:bookId/draft", validateCreateAudiobook, async (request, response) => {
+    const result = await audiobookService.updateDraft(
+      request.params.bookId,
+      request.auth.uid,
+      request.validatedBody,
+    );
+    return response.status(200).json({ data: result });
+  });
+
+  router.post("/audiobooks/:bookId/publications", async (request, response) => {
+    const result = await audiobookService.publishAudiobook(request.params.bookId, request.auth.uid);
+    return response.status(200).json({ data: result });
+  });
+
   router.post(
     "/audiobooks/:bookId/generation-jobs",
     userRateLimit(generationRateLimitMax, "Too many generation requests. Please try again later."),

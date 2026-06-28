@@ -24,9 +24,29 @@ function createTestContext(overrides = {}) {
       bookId: "book-1",
       generationStatus: "draft",
     }),
+    getDraftForEdit: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      title: "My Demo Audiobook",
+      author: "Student Name",
+      coverUrl: null,
+      chapterTitle: "Chapter 1",
+      chapterText: "Text to synthesize.",
+      languageCode: "en-US",
+      voiceId: "Patrick",
+      generationStatus: "draft",
+    }),
+    updateDraft: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      generationStatus: "draft",
+    }),
     requestGeneration: vi.fn().mockResolvedValue({
       bookId: "book-1",
       generationStatus: "pending_generation",
+    }),
+    publishAudiobook: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      generationStatus: "published",
+      published: true,
     }),
   };
   const verifyIdToken = vi.fn(async (token) => {
@@ -133,6 +153,117 @@ describe("audiobook API", () => {
       ]),
     );
     expect(audiobookService.createDraft).not.toHaveBeenCalled();
+  });
+
+  it("loads editable drafts for the authenticated owner", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const response = await request(app)
+      .get("/api/v1/audiobooks/book-1/draft")
+      .set("Authorization", "Bearer valid-token");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      bookId: "book-1",
+      title: "My Demo Audiobook",
+      voiceId: "Patrick",
+      generationStatus: "draft",
+    });
+    expect(audiobookService.getDraftForEdit).toHaveBeenCalledWith("book-1", "user-1");
+  });
+
+  it("requires Firebase auth for draft edit endpoints", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const load = await request(app).get("/api/v1/audiobooks/book-1/draft");
+    const update = await request(app).put("/api/v1/audiobooks/book-1/draft").send(validDraft);
+
+    expect(load.status).toBe(401);
+    expect(update.status).toBe(401);
+    expect(audiobookService.getDraftForEdit).not.toHaveBeenCalled();
+    expect(audiobookService.updateDraft).not.toHaveBeenCalled();
+  });
+
+  it("updates editable drafts with token-derived identity", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const response = await request(app)
+      .put("/api/v1/audiobooks/book-1/draft")
+      .set("Authorization", "Bearer valid-token")
+      .send({ ...validDraft, creatorUid: "attacker", title: "Updated" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({ bookId: "book-1", generationStatus: "draft" });
+    expect(audiobookService.updateDraft).toHaveBeenCalledWith(
+      "book-1",
+      "user-1",
+      expect.objectContaining({ title: "Updated" }),
+    );
+    expect(audiobookService.updateDraft.mock.calls[0][2]).not.toHaveProperty("creatorUid");
+  });
+
+  it("maps draft edit ownership and state errors", async () => {
+    const { app, audiobookService } = createTestContext();
+    audiobookService.getDraftForEdit.mockRejectedValueOnce(
+      new AppError(403, "forbidden", "You can only update your own audiobook"),
+    );
+    audiobookService.updateDraft.mockRejectedValueOnce(
+      new AppError(409, "invalid_draft_state", "Audiobook can only be edited while it is a draft"),
+    );
+
+    const forbidden = await request(app)
+      .get("/api/v1/audiobooks/book-1/draft")
+      .set("Authorization", "Bearer valid-token");
+    const conflict = await request(app)
+      .put("/api/v1/audiobooks/book-1/draft")
+      .set("Authorization", "Bearer valid-token")
+      .send(validDraft);
+
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body.error.code).toBe("forbidden");
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error.code).toBe("invalid_draft_state");
+  });
+
+  it("publishes reviewed audiobooks with token-derived identity", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const response = await request(app)
+      .post("/api/v1/audiobooks/book-1/publications")
+      .set("Authorization", "Bearer valid-token")
+      .send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({
+      bookId: "book-1",
+      generationStatus: "published",
+      published: true,
+    });
+    expect(audiobookService.publishAudiobook).toHaveBeenCalledWith("book-1", "user-1");
+  });
+
+  it("requires Firebase auth for publishing", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const response = await request(app).post("/api/v1/audiobooks/book-1/publications").send({});
+
+    expect(response.status).toBe(401);
+    expect(audiobookService.publishAudiobook).not.toHaveBeenCalled();
+  });
+
+  it("maps publication state errors", async () => {
+    const { app, audiobookService } = createTestContext();
+    audiobookService.publishAudiobook.mockRejectedValueOnce(
+      new AppError(409, "invalid_publication_state", "Audiobook can only be published after it is ready for review"),
+    );
+
+    const response = await request(app)
+      .post("/api/v1/audiobooks/book-1/publications")
+      .set("Authorization", "Bearer valid-token")
+      .send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe("invalid_publication_state");
   });
 
   it("returns 400 for malformed JSON", async () => {

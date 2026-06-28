@@ -7,7 +7,6 @@ export class AudiobookService {
   }
 
   async createDraft(creatorUid, input) {
-    const sourceText = input.chapterText.trim();
     const draft = {
       creatorUid,
       createdByUser: true,
@@ -15,6 +14,33 @@ export class AudiobookService {
       generationStatus: "draft",
       reviewStatus: "pending",
       published: false,
+      ...this.toDraftContent(input),
+    };
+    const bookId = await this.repository.createDraft(draft);
+    return { bookId, generationStatus: "draft" };
+  }
+
+  async getDraftForEdit(bookId, creatorUid) {
+    return this.repository.getEditableDraft(bookId, creatorUid);
+  }
+
+  async updateDraft(bookId, creatorUid, input) {
+    return this.repository.updateDraft(bookId, creatorUid, this.toDraftContent(input));
+  }
+
+  async requestGeneration(bookId, creatorUid) {
+    const job = await this.repository.transitionToPending(bookId, creatorUid);
+    this.queue.enqueue(job);
+    return { bookId, generationStatus: "pending_generation" };
+  }
+
+  async publishAudiobook(bookId, creatorUid) {
+    return this.repository.publish(bookId, creatorUid);
+  }
+
+  toDraftContent(input) {
+    const sourceText = input.chapterText.trim();
+    return {
       title: input.title,
       author: input.author,
       coverUrl: input.coverUrl ?? null,
@@ -25,13 +51,5 @@ export class AudiobookService {
       pollyVoiceId: input.voiceId,
       voiceGender: VOICE_GENDERS[input.voiceId],
     };
-    const bookId = await this.repository.createDraft(draft);
-    return { bookId, generationStatus: "draft" };
-  }
-
-  async requestGeneration(bookId, creatorUid) {
-    const job = await this.repository.transitionToPending(bookId, creatorUid);
-    this.queue.enqueue(job);
-    return { bookId, generationStatus: "pending_generation" };
   }
 }
