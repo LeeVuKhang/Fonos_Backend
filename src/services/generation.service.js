@@ -68,8 +68,10 @@ export class GenerationService {
       creatorUid: job.creatorUid,
       title: "Untitled",
     };
+    let processingChapterId = job.chapterId;
     try {
-      const input = await this.repository.getGenerationInput(job.bookId);
+      const input = await this.repository.getGenerationInput(job.bookId, job.chapterId);
+      processingChapterId = input.chapterId;
       notificationInput = {
         bookId: input.bookId,
         creatorUid: input.creatorUid,
@@ -109,7 +111,11 @@ export class GenerationService {
 
         if (ACTIVE_TASK_STATUSES.has(metadata.pollyTaskStatus)) {
           if (metadataChanged(metadata, persistedMetadata)) {
-            const persisted = await this.repository.savePollyTaskMetadata(input.bookId, metadata);
+            const persisted = await this.repository.savePollyTaskMetadata(
+              input.bookId,
+              input.chapterId,
+              metadata,
+            );
             if (persisted === false) {
               this.logger?.warn?.(
                 { bookId: input.bookId },
@@ -132,10 +138,14 @@ export class GenerationService {
             outputUri: metadata.pollyOutputUri,
             expectedPrefix,
           });
-          const persisted = await this.repository.markReady(input.bookId, {
-            ...output,
-            ...metadata,
-          });
+          const persisted = await this.repository.markReady(
+            input.bookId,
+            input.chapterId,
+            {
+              ...output,
+              ...metadata,
+            },
+          );
           if (persisted === false) {
             this.logger?.warn?.(
               { bookId: input.bookId },
@@ -158,6 +168,7 @@ export class GenerationService {
           );
           const persisted = await this.repository.markFailed(
             input.bookId,
+            input.chapterId,
             generationError,
             metadata,
           );
@@ -173,11 +184,18 @@ export class GenerationService {
       }
     } catch (error) {
       try {
-        const persisted = await this.repository.markFailed(
-          job.bookId,
-          SAFE_GENERATION_ERROR,
-          failureMetadata,
-        );
+        const persisted = processingChapterId
+          ? await this.repository.markFailed(
+            job.bookId,
+            processingChapterId,
+            SAFE_GENERATION_ERROR,
+            failureMetadata,
+          )
+          : await this.repository.markFailed(
+            job.bookId,
+            SAFE_GENERATION_ERROR,
+            failureMetadata,
+          );
         if (persisted === false) {
           this.logger?.warn?.({ bookId: job.bookId }, "Skipped failure state for deleted audiobook");
         } else {

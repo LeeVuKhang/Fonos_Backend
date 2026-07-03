@@ -1,7 +1,10 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 
-import { validateCreateAudiobook } from "../schemas/audiobook.schema.js";
+import {
+  validateCreateAudiobook,
+  validateCreateChapter,
+} from "../schemas/audiobook.schema.js";
 
 function userRateLimit(max, message) {
   return rateLimit({
@@ -45,6 +48,35 @@ export function audiobookRoutes({
     return response.status(200).json({ data: result });
   });
 
+  router.post("/audiobooks/:bookId/chapters", validateCreateChapter, async (request, response) => {
+    const result = await audiobookService.createChapterDraft(
+      request.params.bookId,
+      request.auth.uid,
+      request.validatedBody,
+    );
+    response.location(`/api/v1/audiobooks/${result.bookId}/chapters/${result.chapterId}`);
+    return response.status(201).json({ data: result });
+  });
+
+  router.get("/audiobooks/:bookId/chapters/:chapterId/draft", async (request, response) => {
+    const result = await audiobookService.getChapterDraftForEdit(
+      request.params.bookId,
+      request.params.chapterId,
+      request.auth.uid,
+    );
+    return response.status(200).json({ data: result });
+  });
+
+  router.put("/audiobooks/:bookId/chapters/:chapterId/draft", validateCreateChapter, async (request, response) => {
+    const result = await audiobookService.updateChapterDraft(
+      request.params.bookId,
+      request.params.chapterId,
+      request.auth.uid,
+      request.validatedBody,
+    );
+    return response.status(200).json({ data: result });
+  });
+
   router.post("/audiobooks/:bookId/publications", async (request, response) => {
     const result = await audiobookService.publishAudiobook(request.params.bookId, request.auth.uid);
     return response.status(200).json({ data: result });
@@ -55,6 +87,19 @@ export function audiobookRoutes({
     userRateLimit(generationRateLimitMax, "Too many generation requests. Please try again later."),
     async (request, response) => {
       const result = await audiobookService.requestGeneration(request.params.bookId, request.auth.uid);
+      return response.status(202).json({ data: result });
+    },
+  );
+
+  router.post(
+    "/audiobooks/:bookId/chapters/:chapterId/generation-jobs",
+    userRateLimit(generationRateLimitMax, "Too many generation requests. Please try again later."),
+    async (request, response) => {
+      const result = await audiobookService.requestChapterGeneration(
+        request.params.bookId,
+        request.params.chapterId,
+        request.auth.uid,
+      );
       return response.status(202).json({ data: result });
     },
   );

@@ -85,12 +85,12 @@ describe("GenerationService", () => {
     expect(awsService.getSynthesisTask).toHaveBeenNthCalledWith(2, "task-123");
     expect(sleep).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(2000);
-    expect(repository.savePollyTaskMetadata).toHaveBeenNthCalledWith(1, "book-1", {
+    expect(repository.savePollyTaskMetadata).toHaveBeenNthCalledWith(1, "book-1", "chapter_1", {
       pollyTaskId: "task-123",
       pollyTaskStatus: "scheduled",
       pollyOutputUri: OUTPUT_URI,
     });
-    expect(repository.savePollyTaskMetadata).toHaveBeenNthCalledWith(2, "book-1", {
+    expect(repository.savePollyTaskMetadata).toHaveBeenNthCalledWith(2, "book-1", "chapter_1", {
       pollyTaskId: "task-123",
       pollyTaskStatus: "inProgress",
       pollyOutputUri: OUTPUT_URI,
@@ -99,7 +99,7 @@ describe("GenerationService", () => {
       outputUri: OUTPUT_URI,
       expectedPrefix: "audiobooks/user-1/book-1/chapter_1/",
     });
-    expect(repository.markReady).toHaveBeenCalledWith("book-1", {
+    expect(repository.markReady).toHaveBeenCalledWith("book-1", "chapter_1", {
       ...OUTPUT,
       pollyTaskId: "task-123",
       pollyTaskStatus: "completed",
@@ -140,6 +140,7 @@ describe("GenerationService", () => {
     expect(awsService.getSynthesisTask).toHaveBeenCalledWith("existing-task");
     expect(repository.markReady).toHaveBeenCalledWith(
       "book-1",
+      "chapter_1",
       expect.objectContaining({ pollyTaskId: "existing-task", pollyTaskStatus: "completed" }),
     );
   });
@@ -299,7 +300,7 @@ describe("GenerationService", () => {
 
     await service.process({ bookId: "book-1", creatorUid: "user-1" });
 
-    const [, error, metadata] = repository.markFailed.mock.calls[0];
+    const [, , error, metadata] = repository.markFailed.mock.calls[0];
     expect(error).not.toContain(privateText);
     expect(error).not.toContain("AKIA1234567890123456");
     expect(error).not.toContain("request-123");
@@ -336,6 +337,7 @@ describe("GenerationService", () => {
 
     expect(repository.markFailed).toHaveBeenCalledWith(
       "book-1",
+      "chapter_1",
       "Audio generation failed. Please try again.",
       undefined,
     );

@@ -3,19 +3,27 @@ export class GenerationQueue {
     this.worker = worker;
     this.logger = logger;
     this.jobs = [];
-    this.knownBookIds = new Set();
+    this.knownJobKeys = new Set();
     this.running = false;
     this.idleWaiters = [];
   }
 
   enqueue(job) {
-    if (!job?.bookId || this.knownBookIds.has(job.bookId)) {
+    const key = this.jobKey(job);
+    if (!key || this.knownJobKeys.has(key)) {
       return false;
     }
-    this.knownBookIds.add(job.bookId);
+    this.knownJobKeys.add(key);
     this.jobs.push(job);
     void this.drain();
     return true;
+  }
+
+  jobKey(job) {
+    if (!job?.bookId) {
+      return null;
+    }
+    return `${job.bookId}:${job.chapterId ?? "chapter_1"}`;
   }
 
   onIdle() {
@@ -32,6 +40,7 @@ export class GenerationQueue {
     this.running = true;
     while (this.jobs.length > 0) {
       const job = this.jobs.shift();
+      const key = this.jobKey(job);
       try {
         await this.worker(job);
       } catch (error) {
@@ -40,7 +49,9 @@ export class GenerationQueue {
           "Generation job failed",
         );
       } finally {
-        this.knownBookIds.delete(job.bookId);
+        if (key) {
+          this.knownJobKeys.delete(key);
+        }
       }
     }
     this.running = false;

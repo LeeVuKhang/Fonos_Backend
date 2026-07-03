@@ -15,16 +15,35 @@ function createFirestore(initialBooks = {}) {
   const chapters = new Map();
   const operations = [];
 
+  function collectionRef(path, filters = []) {
+    return {
+      path,
+      doc(id = path === "books" ? "generated-book" : "generated-chapter") {
+        return ref(`${path}/${id}`, id);
+      },
+      where(field, _operator, value) {
+        return collectionRef(path, [...filters, { field, value }]);
+      },
+      async get() {
+        const entries = path === "books"
+          ? [...books.entries()].map(([id, value]) => [id, value])
+          : [...chapters.entries()]
+            .filter(([key]) => key.startsWith(`${path}/`))
+            .map(([key, value]) => [key.slice(path.length + 1), value]);
+        const docs = entries
+          .filter(([, value]) => filters.every((filter) => value?.[filter.field] === filter.value))
+          .map(([id, value]) => documentSnapshot(id, value));
+        return { docs, empty: docs.length === 0 };
+      },
+    };
+  }
+
   function ref(path, id) {
     return {
       id,
       path,
       collection(name) {
-        return {
-          doc(childId) {
-            return ref(`${path}/${name}/${childId}`, childId);
-          },
-        };
+        return collectionRef(`${path}/${name}`);
       },
       async get() {
         const value = path.includes("/chapters/") ? chapters.get(path) : books.get(id);
@@ -43,21 +62,7 @@ function createFirestore(initialBooks = {}) {
   const firestore = {
     collection(name) {
       if (name !== "books") throw new Error("unexpected collection");
-      return {
-        doc(id = "generated-book") {
-          return ref(`books/${id}`, id);
-        },
-        where() {
-          return this;
-        },
-        async get() {
-          return {
-            docs: [...books.entries()]
-              .filter(([, value]) => value.createdByUser && value.generationStatus === "pending_generation")
-              .map(([id, value]) => documentSnapshot(id, value)),
-          };
-        },
-      };
+      return collectionRef(name);
     },
     batch() {
       const writes = [];
@@ -134,6 +139,85 @@ describe("FirestoreAudiobookRepository", () => {
     });
   });
 
+  it("adds a follow-up chapter to a published audiobook without hiding existing audio", async () => {
+    const state = createFirestore({
+      "book-1": {
+        creatorUid: "user-1",
+        generationStatus: "published",
+        published: true,
+        createdByUser: true,
+      },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      generationStatus: "published",
+      published: true,
+      order: 0,
+      audioUrl: "https://example.com/chapter-1.mp3",
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(repository.createChapterDraft("book-1", "user-1", {
+      chapterTitle: "Chapter 2",
+      sourceText: "Second chapter text",
+      contentSample: "Second chapter text",
+      pollyVoiceId: "Ruth",
+      voiceGender: "female",
+    })).resolves.toEqual({
+      bookId: "book-1",
+      chapterId: "chapter_2",
+      generationStatus: "draft",
+    });
+
+    expect(state.books.get("book-1")).toMatchObject({
+      published: true,
+      generationStatus: "draft",
+      activeChapterId: "chapter_2",
+    });
+    expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+      published: true,
+      generationStatus: "published",
+    });
+    expect(state.chapters.get("books/book-1/chapters/chapter_2")).toMatchObject({
+      order: 1,
+      published: false,
+      generationStatus: "draft",
+      sourceText: "Second chapter text",
+    });
+
+    await repository.transitionToPending("book-1", "user-1", "chapter_2");
+    await repository.markReady("book-1", "chapter_2", {
+      audioUrl: "https://example.com/chapter-2.mp3",
+      s3Key: "chapter-2.mp3",
+      audioStoragePath: "chapter-2.mp3",
+    });
+
+    expect(state.books.get("book-1")).toMatchObject({
+      published: true,
+      generationStatus: "ready_for_review",
+      activeChapterId: "chapter_2",
+    });
+    expect(state.chapters.get("books/book-1/chapters/chapter_2")).toMatchObject({
+      published: false,
+      generationStatus: "ready_for_review",
+      audioUrl: "https://example.com/chapter-2.mp3",
+    });
+
+    await repository.publish("book-1", "user-1");
+
+    expect(state.books.get("book-1")).toMatchObject({
+      published: true,
+      generationStatus: "published",
+      activeChapterId: null,
+    });
+    expect(state.chapters.get("books/book-1/chapters/chapter_2")).toMatchObject({
+      published: true,
+      generationStatus: "published",
+    });
+  });
+
   it("allows only one draft-to-pending transition", async () => {
     const state = createFirestore({
       "book-1": { creatorUid: "user-1", generationStatus: "draft", createdByUser: true },
@@ -142,10 +226,12 @@ describe("FirestoreAudiobookRepository", () => {
       firestore: state.firestore,
       serverTimestamp,
     });
+    state.chapters.set("books/book-1/chapters/chapter_1", { generationStatus: "draft" });
 
     await expect(repository.transitionToPending("book-1", "user-1")).resolves.toEqual({
       bookId: "book-1",
       creatorUid: "user-1",
+      chapterId: "chapter_1",
     });
     await expect(repository.transitionToPending("book-1", "user-1")).rejects.toMatchObject({
       status: 409,
@@ -159,6 +245,7 @@ describe("FirestoreAudiobookRepository", () => {
       "book-1": { creatorUid: "user-1", generationStatus: "failed", createdByUser: true },
     });
     state.chapters.set("books/book-1/chapters/chapter_1", {
+      generationStatus: "failed",
       pollyTaskId: "old-task",
       pollyTaskStatus: "failed",
       pollyOutputUri: "https://example.com/old.mp3",
@@ -167,6 +254,7 @@ describe("FirestoreAudiobookRepository", () => {
       firestore: state.firestore,
       serverTimestamp,
     });
+    state.chapters.set("books/book-1/chapters/chapter_1", { generationStatus: "draft" });
 
     await repository.transitionToPending("book-1", "user-1");
 
@@ -196,6 +284,7 @@ describe("FirestoreAudiobookRepository", () => {
       chapterTitle: "Chapter 1",
       sourceText: "Editable source text",
       pollyVoiceId: "Ruth",
+      generationStatus: "draft",
     });
     const repository = new FirestoreAudiobookRepository({
       firestore: state.firestore,
@@ -225,6 +314,7 @@ describe("FirestoreAudiobookRepository", () => {
     });
     state.chapters.set("books/book-1/chapters/chapter_1", {
       sourceText: "Old text",
+      generationStatus: "draft",
       pollyTaskId: "old-task",
     });
     const repository = new FirestoreAudiobookRepository({
@@ -270,12 +360,13 @@ describe("FirestoreAudiobookRepository", () => {
       "pending": { creatorUid: "user-1", generationStatus: "pending_generation", createdByUser: true },
       "missing-chapter": { creatorUid: "user-1", generationStatus: "draft", createdByUser: true },
     });
-    state.chapters.set("books/draft/chapters/chapter_1", { sourceText: "Text" });
-    state.chapters.set("books/pending/chapters/chapter_1", { sourceText: "Text" });
+    state.chapters.set("books/draft/chapters/chapter_1", { sourceText: "Text", generationStatus: "draft" });
+    state.chapters.set("books/pending/chapters/chapter_1", { sourceText: "Text", generationStatus: "pending_generation" });
     const repository = new FirestoreAudiobookRepository({
       firestore: state.firestore,
       serverTimestamp,
     });
+    state.chapters.set("books/book-1/chapters/chapter_1", { generationStatus: "pending_generation" });
     const draft = {
       title: "Title",
       author: "Author",
@@ -305,6 +396,7 @@ describe("FirestoreAudiobookRepository", () => {
       firestore: state.firestore,
       serverTimestamp,
     });
+    state.chapters.set("books/book-1/chapters/chapter_1", { generationStatus: "draft" });
 
     await repository.savePollyTaskMetadata("book-1", {
       pollyTaskId: "task-123",
@@ -329,6 +421,7 @@ describe("FirestoreAudiobookRepository", () => {
       firestore: state.firestore,
       serverTimestamp,
     });
+    state.chapters.set("books/book-1/chapters/chapter_1", { generationStatus: "draft" });
 
     await expect(repository.transitionToPending("missing", "user-1")).rejects.toMatchObject({
       status: 404,
@@ -346,6 +439,7 @@ describe("FirestoreAudiobookRepository", () => {
       firestore: state.firestore,
       serverTimestamp,
     });
+    state.chapters.set("books/book-1/chapters/chapter_1", { generationStatus: "pending_generation" });
 
     await repository.markReady("book-1", {
       audioUrl: "https://example.com/audio.mp3",
@@ -482,6 +576,7 @@ describe("FirestoreAudiobookRepository", () => {
     });
     state.chapters.set("books/book-1/chapters/chapter_1", {
       sourceText: "Chapter text",
+      generationStatus: "pending_generation",
       pollyVoiceId: "Ruth",
       pollyTaskId: "task-123",
       pollyTaskStatus: "scheduled",
@@ -524,7 +619,7 @@ describe("FirestoreAudiobookRepository", () => {
         createdByUser: true,
       },
     });
-    state.chapters.set("books/book-1/chapters/chapter_1", { sourceText: "Text" });
+    state.chapters.set("books/book-1/chapters/chapter_1", { sourceText: "Text", generationStatus: "draft" });
     const repository = new FirestoreAudiobookRepository({
       firestore: state.firestore,
       serverTimestamp,
@@ -548,9 +643,13 @@ describe("FirestoreAudiobookRepository", () => {
       firestore: state.firestore,
       serverTimestamp,
     });
+    state.chapters.set("books/book-1/chapters/chapter_2", {
+      generationStatus: "pending_generation",
+      sourceText: "must not escape",
+    });
 
     await expect(repository.listPendingGenerationJobs()).resolves.toEqual([
-      { bookId: "book-1", creatorUid: "user-1" },
+      { bookId: "book-1", creatorUid: "user-1", chapterId: "chapter_2" },
     ]);
   });
 });

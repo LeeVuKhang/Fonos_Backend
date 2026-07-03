@@ -14,6 +14,13 @@ const validDraft = {
   voiceId: "Patrick",
 };
 
+const validChapterDraft = {
+  chapterTitle: "Chapter 2",
+  chapterText: "More text to synthesize.",
+  languageCode: "en-US",
+  voiceId: "Ruth",
+};
+
 function repeatedWords(count) {
   return Array.from({ length: count }, () => "word").join(" ");
 }
@@ -39,8 +46,33 @@ function createTestContext(overrides = {}) {
       bookId: "book-1",
       generationStatus: "draft",
     }),
+    createChapterDraft: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      chapterId: "chapter_2",
+      generationStatus: "draft",
+    }),
+    getChapterDraftForEdit: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      chapterId: "chapter_2",
+      bookTitle: "My Demo Audiobook",
+      chapterTitle: "Chapter 2",
+      chapterText: "More text to synthesize.",
+      languageCode: "en-US",
+      voiceId: "Ruth",
+      generationStatus: "draft",
+    }),
+    updateChapterDraft: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      chapterId: "chapter_2",
+      generationStatus: "draft",
+    }),
     requestGeneration: vi.fn().mockResolvedValue({
       bookId: "book-1",
+      generationStatus: "pending_generation",
+    }),
+    requestChapterGeneration: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      chapterId: "chapter_2",
       generationStatus: "pending_generation",
     }),
     publishAudiobook: vi.fn().mockResolvedValue({
@@ -225,6 +257,44 @@ describe("audiobook API", () => {
     expect(conflict.body.error.code).toBe("invalid_draft_state");
   });
 
+  it("creates, loads, and updates chapter drafts with token-derived identity", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const create = await request(app)
+      .post("/api/v1/audiobooks/book-1/chapters")
+      .set("Authorization", "Bearer valid-token")
+      .send({ ...validChapterDraft, creatorUid: "attacker" });
+    const load = await request(app)
+      .get("/api/v1/audiobooks/book-1/chapters/chapter_2/draft")
+      .set("Authorization", "Bearer valid-token");
+    const update = await request(app)
+      .put("/api/v1/audiobooks/book-1/chapters/chapter_2/draft")
+      .set("Authorization", "Bearer valid-token")
+      .send({ ...validChapterDraft, chapterText: "Updated chapter text" });
+
+    expect(create.status).toBe(201);
+    expect(create.headers.location).toBe("/api/v1/audiobooks/book-1/chapters/chapter_2");
+    expect(load.status).toBe(200);
+    expect(load.body.data).toMatchObject({ chapterId: "chapter_2", voiceId: "Ruth" });
+    expect(update.status).toBe(200);
+    expect(audiobookService.createChapterDraft).toHaveBeenCalledWith(
+      "book-1",
+      "user-1",
+      expect.not.objectContaining({ creatorUid: expect.anything() }),
+    );
+    expect(audiobookService.getChapterDraftForEdit).toHaveBeenCalledWith(
+      "book-1",
+      "chapter_2",
+      "user-1",
+    );
+    expect(audiobookService.updateChapterDraft).toHaveBeenCalledWith(
+      "book-1",
+      "chapter_2",
+      "user-1",
+      expect.objectContaining({ chapterText: "Updated chapter text" }),
+    );
+  });
+
   it("publishes reviewed audiobooks with token-derived identity", async () => {
     const { app, audiobookService } = createTestContext();
 
@@ -317,6 +387,27 @@ describe("audiobook API", () => {
     expect(audiobookService.requestGeneration).toHaveBeenCalledWith("book-1", "user-1");
     expect(conflict.status).toBe(409);
     expect(conflict.body.error.code).toBe("invalid_generation_state");
+  });
+
+  it("accepts chapter-level generation requests", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const response = await request(app)
+      .post("/api/v1/audiobooks/book-1/chapters/chapter_2/generation-jobs")
+      .set("Authorization", "Bearer valid-token")
+      .send({});
+
+    expect(response.status).toBe(202);
+    expect(response.body.data).toMatchObject({
+      bookId: "book-1",
+      chapterId: "chapter_2",
+      generationStatus: "pending_generation",
+    });
+    expect(audiobookService.requestChapterGeneration).toHaveBeenCalledWith(
+      "book-1",
+      "chapter_2",
+      "user-1",
+    );
   });
 
   it("rate limits generation requests per authenticated user", async () => {
