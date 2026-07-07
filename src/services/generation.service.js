@@ -119,7 +119,7 @@ export class GenerationService {
             if (persisted === false) {
               this.logger?.warn?.(
                 { bookId: input.bookId },
-                "Stopped polling deleted audiobook",
+                "Stopped polling deleted audiobook chapter",
               );
               return;
             }
@@ -149,7 +149,7 @@ export class GenerationService {
           if (persisted === false) {
             this.logger?.warn?.(
               { bookId: input.bookId },
-              "Discarded generation result for deleted audiobook",
+              "Discarded generation result for deleted audiobook chapter",
             );
             return;
           }
@@ -173,7 +173,7 @@ export class GenerationService {
             metadata,
           );
           if (persisted === false) {
-            this.logger?.warn?.({ bookId: input.bookId }, "Skipped failure state for deleted audiobook");
+            this.logger?.warn?.({ bookId: input.bookId }, "Skipped failure state for deleted audiobook chapter");
           } else {
             await this.notifyGenerationStatus(notificationInput, "failed");
           }
@@ -197,7 +197,7 @@ export class GenerationService {
             failureMetadata,
           );
         if (persisted === false) {
-          this.logger?.warn?.({ bookId: job.bookId }, "Skipped failure state for deleted audiobook");
+          this.logger?.warn?.({ bookId: job.bookId }, "Skipped failure state for deleted audiobook chapter");
         } else {
           await this.notifyGenerationStatus(notificationInput, "failed");
         }

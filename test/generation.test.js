@@ -178,6 +178,67 @@ describe("GenerationService", () => {
     });
   });
 
+  it("sends a ready notification after a follow-up chapter finishes", async () => {
+    const chapterTwoOutputUri =
+      "https://s3.us-east-1.amazonaws.com/demo-bucket/audiobooks/user-1/book-1/chapter_2/task-456.mp3";
+    const chapterTwoOutput = {
+      audioUrl: chapterTwoOutputUri,
+      s3Key: "audiobooks/user-1/book-1/chapter_2/task-456.mp3",
+      audioStoragePath:
+        "s3://demo-bucket/audiobooks/user-1/book-1/chapter_2/task-456.mp3",
+    };
+    const repository = createRepository(generationInput({
+      chapterId: "chapter_2",
+      sourceText: "Follow-up chapter",
+    }));
+    const notificationService = {
+      notifyGenerationStatus: vi.fn().mockResolvedValue(undefined),
+    };
+    const awsService = {
+      startSynthesisTask: vi.fn().mockResolvedValue({
+        TaskId: "task-456",
+        TaskStatus: "completed",
+        OutputUri: chapterTwoOutputUri,
+      }),
+      getSynthesisTask: vi.fn(),
+      resolveS3Output: vi.fn().mockReturnValue(chapterTwoOutput),
+    };
+    const service = new GenerationService({
+      repository,
+      awsService,
+      pollIntervalMs: 2000,
+      sleep: vi.fn(),
+      logger: createLogger(),
+      notificationService,
+    });
+
+    await service.process({ bookId: "book-1", creatorUid: "user-1", chapterId: "chapter_2" });
+
+    expect(awsService.startSynthesisTask).toHaveBeenCalledWith({
+      chapterText: "Follow-up chapter",
+      voiceId: "Patrick",
+      creatorUid: "user-1",
+      bookId: "book-1",
+      chapterId: "chapter_2",
+    });
+    expect(awsService.resolveS3Output).toHaveBeenCalledWith({
+      outputUri: chapterTwoOutputUri,
+      expectedPrefix: "audiobooks/user-1/book-1/chapter_2/",
+    });
+    expect(repository.markReady).toHaveBeenCalledWith("book-1", "chapter_2", {
+      ...chapterTwoOutput,
+      pollyTaskId: "task-456",
+      pollyTaskStatus: "completed",
+      pollyOutputUri: chapterTwoOutputUri,
+    });
+    expect(notificationService.notifyGenerationStatus).toHaveBeenCalledWith({
+      bookId: "book-1",
+      creatorUid: "user-1",
+      title: "Demo Book",
+      generationStatus: "ready_for_review",
+    });
+  });
+
   it("sends a failed notification after Polly reports a failed task", async () => {
     const repository = createRepository();
     const notificationService = {
@@ -237,6 +298,36 @@ describe("GenerationService", () => {
     });
 
     await service.process({ bookId: "book-1", creatorUid: "user-1" });
+
+    expect(notificationService.notifyGenerationStatus).not.toHaveBeenCalled();
+  });
+
+  it("skips notifications when a failed chapter was deleted before the terminal write", async () => {
+    const repository = createRepository();
+    repository.markFailed.mockResolvedValue(false);
+    const notificationService = {
+      notifyGenerationStatus: vi.fn(),
+    };
+    const awsService = {
+      startSynthesisTask: vi.fn().mockResolvedValue({
+        TaskId: "task-123",
+        TaskStatus: "failed",
+        OutputUri: OUTPUT_URI,
+        TaskStatusReason: "Polly failed safely",
+      }),
+      getSynthesisTask: vi.fn(),
+      resolveS3Output: vi.fn(),
+    };
+    const service = new GenerationService({
+      repository,
+      awsService,
+      pollIntervalMs: 2000,
+      sleep: vi.fn(),
+      logger: createLogger(),
+      notificationService,
+    });
+
+    await service.process({ bookId: "book-1", creatorUid: "user-1", chapterId: "chapter_1" });
 
     expect(notificationService.notifyGenerationStatus).not.toHaveBeenCalled();
   });

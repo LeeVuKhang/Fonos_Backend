@@ -4,6 +4,7 @@ import rateLimit from "express-rate-limit";
 import {
   validateCreateAudiobook,
   validateCreateChapter,
+  validateVisibility,
 } from "../schemas/audiobook.schema.js";
 
 function userRateLimit(max, message) {
@@ -79,6 +80,24 @@ export function audiobookRoutes({
 
   router.post("/audiobooks/:bookId/publications", async (request, response) => {
     const result = await audiobookService.publishAudiobook(request.params.bookId, request.auth.uid);
+    return response.status(200).json({ data: result });
+  });
+
+  router.patch("/audiobooks/:bookId/visibility", validateVisibility, async (request, response) => {
+    const result = await audiobookService.setAudiobookVisibility(
+      request.params.bookId,
+      request.auth.uid,
+      request.validatedBody.hiddenByCreator,
+    );
+    return response.status(200).json({ data: result });
+  });
+
+  router.delete("/audiobooks/:bookId/chapters/:chapterId", async (request, response) => {
+    const result = await audiobookService.deleteChapter(
+      request.params.bookId,
+      request.params.chapterId,
+      request.auth.uid,
+    );
     return response.status(200).json({ data: result });
   });
 

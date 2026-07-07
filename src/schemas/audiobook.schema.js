@@ -56,6 +56,12 @@ export const createChapterSchema = z
   })
   .strip();
 
+export const visibilitySchema = z
+  .object({
+    hiddenByCreator: z.boolean(),
+  })
+  .strip();
+
 export function validateCreateAudiobook(request, _response, next) {
   try {
     request.validatedBody = createAudiobookSchema.parse(request.body);
@@ -68,6 +74,15 @@ export function validateCreateAudiobook(request, _response, next) {
 export function validateCreateChapter(request, _response, next) {
   try {
     request.validatedBody = createChapterSchema.parse(request.body);
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+export function validateVisibility(request, _response, next) {
+  try {
+    request.validatedBody = visibilitySchema.parse(request.body);
     next();
   } catch (error) {
     next(error);

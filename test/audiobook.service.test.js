@@ -118,6 +118,48 @@ describe("AudiobookService", () => {
     expect(queue.enqueue).not.toHaveBeenCalled();
   });
 
+  it("toggles audiobook visibility through the repository without enqueueing generation", async () => {
+    const repository = {
+      setVisibility: vi.fn().mockResolvedValue({
+        bookId: "book-1",
+        hiddenByCreator: true,
+      }),
+    };
+    const queue = { enqueue: vi.fn() };
+    const service = new AudiobookService({ repository, queue });
+
+    await expect(service.setAudiobookVisibility("book-1", "user-1", true)).resolves.toEqual({
+      bookId: "book-1",
+      hiddenByCreator: true,
+    });
+
+    expect(repository.setVisibility).toHaveBeenCalledWith("book-1", "user-1", true);
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("soft-deletes chapters through the repository without enqueueing generation", async () => {
+    const repository = {
+      deleteChapter: vi.fn().mockResolvedValue({
+        bookId: "book-1",
+        chapterId: "chapter_2",
+        deleted: true,
+        generationStatus: "deleted",
+      }),
+    };
+    const queue = { enqueue: vi.fn() };
+    const service = new AudiobookService({ repository, queue });
+
+    await expect(service.deleteChapter("book-1", "chapter_2", "user-1")).resolves.toEqual({
+      bookId: "book-1",
+      chapterId: "chapter_2",
+      deleted: true,
+      generationStatus: "deleted",
+    });
+
+    expect(repository.deleteChapter).toHaveBeenCalledWith("book-1", "chapter_2", "user-1");
+    expect(queue.enqueue).not.toHaveBeenCalled();
+  });
+
   it("does not enqueue when ownership or state validation fails", async () => {
     const repository = {
       transitionToPending: vi.fn().mockRejectedValue(

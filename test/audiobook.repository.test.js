@@ -520,6 +520,258 @@ describe("FirestoreAudiobookRepository", () => {
     });
   });
 
+  it("toggles public visibility for owned user-created audiobooks without changing publication", async () => {
+    const state = createFirestore({
+      "book-1": {
+        creatorUid: "user-1",
+        generationStatus: "published",
+        published: true,
+        createdByUser: true,
+      },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      generationStatus: "published",
+      published: true,
+      audioUrl: "https://example.com/audio.mp3",
+      s3Key: "audio.mp3",
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(repository.setVisibility("book-1", "user-1", true)).resolves.toEqual({
+      bookId: "book-1",
+      hiddenByCreator: true,
+    });
+
+    expect(state.books.get("book-1")).toMatchObject({
+      hiddenByCreator: true,
+      hiddenByUid: "user-1",
+      hiddenAt: "SERVER_TIMESTAMP",
+      updatedAt: "SERVER_TIMESTAMP",
+      published: true,
+    });
+    expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+      generationStatus: "published",
+      published: true,
+      audioUrl: "https://example.com/audio.mp3",
+      s3Key: "audio.mp3",
+    });
+
+    await expect(repository.setVisibility("book-1", "user-1", false)).resolves.toEqual({
+      bookId: "book-1",
+      hiddenByCreator: false,
+    });
+
+    expect(state.books.get("book-1")).toMatchObject({
+      hiddenByCreator: false,
+      hiddenByUid: null,
+      hiddenAt: null,
+      published: true,
+    });
+  });
+
+  it("rejects visibility toggles for missing books, wrong owners, and non-user-created books", async () => {
+    const state = createFirestore({
+      "book-1": { creatorUid: "user-1", generationStatus: "draft", createdByUser: true },
+      "book-2": { creatorUid: "user-1", generationStatus: "draft", createdByUser: false },
+      "book-3": { creatorUid: "user-1", generationStatus: "draft" },
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(repository.setVisibility("missing", "user-1", true)).rejects.toMatchObject({ status: 404 });
+    await expect(repository.setVisibility("book-1", "attacker", true)).rejects.toMatchObject({ status: 403 });
+    await expect(repository.setVisibility("book-2", "user-1", true)).rejects.toMatchObject({ status: 403 });
+    await expect(repository.setVisibility("book-3", "user-1", true)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("soft-deletes draft, failed, pending, and review chapters without deleting audio metadata", async () => {
+    const deletableStatuses = ["draft", "failed", "pending_generation", "ready_for_review"];
+
+    for (const status of deletableStatuses) {
+      const state = createFirestore({
+        "book-1": {
+          creatorUid: "user-1",
+          generationStatus: status,
+          published: false,
+          createdByUser: true,
+          activeChapterId: "chapter_1",
+        },
+      });
+      state.chapters.set("books/book-1/chapters/chapter_1", {
+        generationStatus: status,
+        published: false,
+        order: 0,
+        audioUrl: "https://example.com/review.mp3",
+        s3Key: "review.mp3",
+      });
+      const repository = new FirestoreAudiobookRepository({
+        firestore: state.firestore,
+        serverTimestamp,
+      });
+
+      await expect(repository.deleteChapter("book-1", "chapter_1", "user-1")).resolves.toEqual({
+        bookId: "book-1",
+        chapterId: "chapter_1",
+        deleted: true,
+        generationStatus: "deleted",
+      });
+
+      expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+        deletedByCreator: true,
+        deletedByUid: "user-1",
+        deletedAt: "SERVER_TIMESTAMP",
+        generationStatus: "deleted",
+        published: false,
+        audioUrl: "https://example.com/review.mp3",
+        s3Key: "review.mp3",
+      });
+      expect(state.books.get("book-1")).toMatchObject({
+        generationStatus: "draft",
+        activeChapterId: null,
+        published: false,
+      });
+    }
+  });
+
+  it("recalculates parent state from non-deleted chapters after chapter delete", async () => {
+    const state = createFirestore({
+      "book-1": {
+        creatorUid: "user-1",
+        generationStatus: "pending_generation",
+        published: true,
+        createdByUser: true,
+        activeChapterId: "chapter_2",
+      },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      generationStatus: "published",
+      published: true,
+      order: 0,
+      audioUrl: "https://example.com/chapter-1.mp3",
+    });
+    state.chapters.set("books/book-1/chapters/chapter_2", {
+      generationStatus: "pending_generation",
+      published: false,
+      order: 1,
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await repository.deleteChapter("book-1", "chapter_2", "user-1");
+
+    expect(state.books.get("book-1")).toMatchObject({
+      generationStatus: "published",
+      reviewStatus: "approved",
+      published: true,
+      activeChapterId: null,
+      generationError: null,
+    });
+    expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+      generationStatus: "published",
+      published: true,
+      audioUrl: "https://example.com/chapter-1.mp3",
+    });
+  });
+
+  it("rejects chapter delete for missing resources, wrong owners, non-user uploads, and published chapters", async () => {
+    const state = createFirestore({
+      "book-1": {
+        creatorUid: "user-1",
+        generationStatus: "draft",
+        createdByUser: true,
+      },
+      "book-2": {
+        creatorUid: "user-1",
+        generationStatus: "draft",
+        createdByUser: false,
+      },
+      "book-3": {
+        creatorUid: "user-1",
+        generationStatus: "draft",
+      },
+      "published": {
+        creatorUid: "user-1",
+        generationStatus: "published",
+        createdByUser: true,
+      },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      generationStatus: "draft",
+      published: false,
+    });
+    state.chapters.set("books/book-2/chapters/chapter_1", {
+      generationStatus: "draft",
+      published: false,
+    });
+    state.chapters.set("books/book-3/chapters/chapter_1", {
+      generationStatus: "draft",
+      published: false,
+    });
+    state.chapters.set("books/published/chapters/chapter_1", {
+      generationStatus: "published",
+      published: true,
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(repository.deleteChapter("missing", "chapter_1", "user-1")).rejects.toMatchObject({ status: 404 });
+    await expect(repository.deleteChapter("book-1", "missing", "user-1")).rejects.toMatchObject({ status: 404 });
+    await expect(repository.deleteChapter("book-1", "chapter_1", "attacker")).rejects.toMatchObject({ status: 403 });
+    await expect(repository.deleteChapter("book-2", "chapter_1", "user-1")).rejects.toMatchObject({ status: 403 });
+    await expect(repository.deleteChapter("book-3", "chapter_1", "user-1")).rejects.toMatchObject({ status: 403 });
+    await expect(repository.deleteChapter("published", "chapter_1", "user-1")).rejects.toMatchObject({
+      status: 409,
+      code: "invalid_chapter_delete_state",
+    });
+  });
+
+  it("ignores generation metadata and terminal writes for deleted chapters", async () => {
+    const state = createFirestore({
+      "book-1": {
+        creatorUid: "user-1",
+        generationStatus: "draft",
+        createdByUser: true,
+      },
+    });
+    state.chapters.set("books/book-1/chapters/chapter_1", {
+      generationStatus: "deleted",
+      deletedByCreator: true,
+      deletedAt: "EARLIER",
+      published: false,
+    });
+    const repository = new FirestoreAudiobookRepository({
+      firestore: state.firestore,
+      serverTimestamp,
+    });
+
+    await expect(repository.savePollyTaskMetadata("book-1", {
+      pollyTaskId: "task-123",
+      pollyTaskStatus: "inProgress",
+    })).resolves.toBe(false);
+    await expect(repository.markReady("book-1", {
+      audioUrl: "https://example.com/audio.mp3",
+      s3Key: "audio.mp3",
+    })).resolves.toBe(false);
+    await expect(repository.markFailed("book-1", "Safe error")).resolves.toBe(false);
+
+    expect(state.chapters.get("books/book-1/chapters/chapter_1")).toMatchObject({
+      generationStatus: "deleted",
+      deletedAt: "EARLIER",
+    });
+    expect(state.books.get("book-1")).toMatchObject({
+      generationStatus: "draft",
+    });
+  });
+
   it("rejects publishing missing books, wrong owners, and non-review states", async () => {
     const state = createFirestore({
       "ready": { creatorUid: "user-1", generationStatus: "ready_for_review", createdByUser: true },

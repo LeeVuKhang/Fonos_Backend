@@ -61,6 +61,14 @@ export class AudiobookService {
     return this.repository.publish(bookId, creatorUid);
   }
 
+  async setAudiobookVisibility(bookId, creatorUid, hiddenByCreator) {
+    return this.repository.setVisibility(bookId, creatorUid, hiddenByCreator);
+  }
+
+  async deleteChapter(bookId, chapterId, creatorUid) {
+    return this.repository.deleteChapter(bookId, chapterId, creatorUid);
+  }
+
   toDraftContent(input) {
     const sourceText = input.chapterText.trim();
     return {

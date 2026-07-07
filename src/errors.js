@@ -42,6 +42,14 @@ export function invalidPublicationState() {
   );
 }
 
+export function invalidChapterDeleteState() {
+  return new AppError(
+    409,
+    "invalid_chapter_delete_state",
+    "Published chapters cannot be deleted in this version",
+  );
+}
+
 function zodDetails(error) {
   return error.issues.map((issue) => ({
     field: issue.path.join("."),

@@ -80,6 +80,16 @@ function createTestContext(overrides = {}) {
       generationStatus: "published",
       published: true,
     }),
+    setAudiobookVisibility: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      hiddenByCreator: true,
+    }),
+    deleteChapter: vi.fn().mockResolvedValue({
+      bookId: "book-1",
+      chapterId: "chapter_2",
+      deleted: true,
+      generationStatus: "deleted",
+    }),
   };
   const verifyIdToken = vi.fn(async (token) => {
     if (token !== "valid-token") {
@@ -319,6 +329,72 @@ describe("audiobook API", () => {
 
     expect(response.status).toBe(401);
     expect(audiobookService.publishAudiobook).not.toHaveBeenCalled();
+  });
+
+  it("toggles audiobook visibility with token-derived identity", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const response = await request(app)
+      .patch("/api/v1/audiobooks/book-1/visibility")
+      .set("Authorization", "Bearer valid-token")
+      .send({ hiddenByCreator: true });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({
+      bookId: "book-1",
+      hiddenByCreator: true,
+    });
+    expect(audiobookService.setAudiobookVisibility).toHaveBeenCalledWith("book-1", "user-1", true);
+  });
+
+  it("rejects invalid visibility payloads", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const response = await request(app)
+      .patch("/api/v1/audiobooks/book-1/visibility")
+      .set("Authorization", "Bearer valid-token")
+      .send({ hiddenByCreator: "yes" });
+
+    expect(response.status).toBe(422);
+    expect(response.body.error.code).toBe("validation_error");
+    expect(audiobookService.setAudiobookVisibility).not.toHaveBeenCalled();
+  });
+
+  it("soft-deletes chapters with token-derived identity", async () => {
+    const { app, audiobookService } = createTestContext();
+
+    const response = await request(app)
+      .delete("/api/v1/audiobooks/book-1/chapters/chapter_2")
+      .set("Authorization", "Bearer valid-token")
+      .send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({
+      bookId: "book-1",
+      chapterId: "chapter_2",
+      deleted: true,
+      generationStatus: "deleted",
+    });
+    expect(audiobookService.deleteChapter).toHaveBeenCalledWith("book-1", "chapter_2", "user-1");
+  });
+
+  it("maps chapter delete state errors", async () => {
+    const { app, audiobookService } = createTestContext();
+    audiobookService.deleteChapter.mockRejectedValueOnce(
+      new AppError(
+        409,
+        "invalid_chapter_delete_state",
+        "Published chapters cannot be deleted in this version",
+      ),
+    );
+
+    const response = await request(app)
+      .delete("/api/v1/audiobooks/book-1/chapters/chapter_2")
+      .set("Authorization", "Bearer valid-token")
+      .send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe("invalid_chapter_delete_state");
   });
 
   it("maps publication state errors", async () => {

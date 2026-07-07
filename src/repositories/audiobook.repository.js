@@ -1,5 +1,6 @@
 import {
   forbidden,
+  invalidChapterDeleteState,
   invalidDraftEditState,
   invalidGenerationState,
   invalidPublicationState,
@@ -11,9 +12,17 @@ const CHAPTERS = "chapters";
 export const FIRST_CHAPTER_ID = "chapter_1";
 const USERS = "users";
 const NOTIFICATION_TOKENS = "notificationTokens";
+const PENDING_GENERATION = "pending_generation";
+const DELETED = "deleted";
+const DELETABLE_CHAPTER_STATUSES = new Set([
+  "draft",
+  "failed",
+  PENDING_GENERATION,
+  "ready_for_review",
+]);
 
 const ACTIVE_BOOK_STATUS_PRIORITY = [
-  "pending_generation",
+  PENDING_GENERATION,
   "ready_for_review",
   "failed",
   "draft",
@@ -41,10 +50,16 @@ function snapshotToChapter(snapshot) {
   return { id: snapshot.id, ...(snapshot.data() ?? {}) };
 }
 
+function isDeletedChapter(chapter) {
+  return chapter?.deletedByCreator === true
+    || chapter?.deletedAt != null
+    || chapter?.generationStatus === DELETED;
+}
+
 function selectActiveChapter(chapters) {
   for (const status of ACTIVE_BOOK_STATUS_PRIORITY) {
     const matching = chapters
-      .filter((chapter) => chapter.generationStatus === status)
+      .filter((chapter) => !isDeletedChapter(chapter) && chapter.generationStatus === status)
       .sort((left, right) => chapterSortValue(left) - chapterSortValue(right));
     if (matching.length > 0) {
       return matching[0];
@@ -197,6 +212,9 @@ export class FirestoreAudiobookRepository {
       const book = bookSnapshot.data();
       const chapter = chapterSnapshot.data();
       this.assertOwnsUserCreatedBook(book, creatorUid);
+      if (isDeletedChapter(chapter)) {
+        throw notFound();
+      }
       if (!["draft", "failed"].includes(chapter.generationStatus)) {
         throw invalidGenerationState();
       }
@@ -239,6 +257,9 @@ export class FirestoreAudiobookRepository {
     }
     const book = bookSnapshot.data();
     const chapter = chapterSnapshot.data();
+    if (isDeletedChapter(chapter)) {
+      throw notFound();
+    }
     this.assertCanEditInitialDraft(book, chapter, creatorUid);
     return {
       bookId,
@@ -264,6 +285,9 @@ export class FirestoreAudiobookRepository {
     }
     const book = bookSnapshot.data();
     const chapter = chapterSnapshot.data();
+    if (isDeletedChapter(chapter)) {
+      throw notFound();
+    }
     this.assertCanEditChapterDraft(book, chapter, creatorUid);
     return {
       bookId,
@@ -290,6 +314,9 @@ export class FirestoreAudiobookRepository {
       }
       const book = bookSnapshot.data();
       const chapter = chapterSnapshot.data();
+      if (isDeletedChapter(chapter)) {
+        throw notFound();
+      }
       this.assertCanEditInitialDraft(book, chapter, creatorUid);
       const timestamp = this.serverTimestamp();
       transaction.set(
@@ -349,6 +376,9 @@ export class FirestoreAudiobookRepository {
       }
       const book = bookSnapshot.data();
       const chapter = chapterSnapshot.data();
+      if (isDeletedChapter(chapter)) {
+        throw notFound();
+      }
       this.assertCanEditChapterDraft(book, chapter, creatorUid);
       const timestamp = this.serverTimestamp();
       transaction.set(
@@ -396,6 +426,9 @@ export class FirestoreAudiobookRepository {
     }
     const book = bookSnapshot.data();
     const chapter = chapterSnapshot.data();
+    if (isDeletedChapter(chapter)) {
+      throw notFound("Audiobook generation input was not found");
+    }
     if (chapter.generationStatus !== "pending_generation") {
       throw invalidGenerationState();
     }
@@ -430,7 +463,10 @@ export class FirestoreAudiobookRepository {
 
       const chapters = chaptersSnapshot.docs.map(snapshotToChapter);
       const readyChapters = chapters.filter((chapter) =>
-        chapter.generationStatus === "ready_for_review" && typeof chapter.audioUrl === "string" && chapter.audioUrl.trim() !== ""
+        !isDeletedChapter(chapter)
+          && chapter.generationStatus === "ready_for_review"
+          && typeof chapter.audioUrl === "string"
+          && chapter.audioUrl.trim() !== ""
       );
       if (readyChapters.length === 0) {
         throw invalidPublicationState();
@@ -477,11 +513,106 @@ export class FirestoreAudiobookRepository {
     });
   }
 
+  async setVisibility(bookId, creatorUid, hiddenByCreator) {
+    const bookRef = this.bookRef(bookId);
+    return this.firestore.runTransaction(async (transaction) => {
+      const bookSnapshot = await transaction.get(bookRef);
+      if (!bookSnapshot.exists) {
+        throw notFound();
+      }
+      const book = bookSnapshot.data();
+      this.assertOwnsExplicitUserCreatedBook(book, creatorUid);
+
+      const timestamp = this.serverTimestamp();
+      const hidden = hiddenByCreator === true;
+      transaction.set(
+        bookRef,
+        {
+          hiddenByCreator: hidden,
+          hiddenByUid: hidden ? creatorUid : null,
+          hiddenAt: hidden ? timestamp : null,
+          updatedAt: timestamp,
+        },
+        { merge: true },
+      );
+      return { bookId, hiddenByCreator: hidden };
+    });
+  }
+
+  async deleteChapter(bookId, chapterId, creatorUid) {
+    const safeChapterId = normalizeChapterId(chapterId);
+    const bookRef = this.bookRef(bookId);
+    const chapterRef = this.chapterRef(bookId, safeChapterId);
+    const chaptersRef = this.chaptersRef(bookId);
+    return this.firestore.runTransaction(async (transaction) => {
+      const [bookSnapshot, chapterSnapshot, chaptersSnapshot] = await Promise.all([
+        transaction.get(bookRef),
+        transaction.get(chapterRef),
+        transaction.get(chaptersRef),
+      ]);
+      if (!bookSnapshot.exists || !chapterSnapshot.exists) {
+        throw notFound();
+      }
+      const book = bookSnapshot.data();
+      const chapter = chapterSnapshot.data();
+      this.assertOwnsExplicitUserCreatedBook(book, creatorUid);
+      if (isDeletedChapter(chapter)) {
+        throw notFound();
+      }
+      if (chapter.published === true
+        || chapter.generationStatus === "published"
+        || !DELETABLE_CHAPTER_STATUSES.has(chapter.generationStatus)) {
+        throw invalidChapterDeleteState();
+      }
+
+      const timestamp = this.serverTimestamp();
+      const deletedState = {
+        deletedByCreator: true,
+        deletedByUid: creatorUid,
+        deletedAt: timestamp,
+        generationStatus: DELETED,
+        published: false,
+        updatedAt: timestamp,
+      };
+      const updatedChapters = chaptersSnapshot.docs.map((snapshot) => {
+        const currentChapter = snapshotToChapter(snapshot);
+        return currentChapter.id === safeChapterId
+          ? { ...currentChapter, ...deletedState }
+          : currentChapter;
+      });
+      transaction.set(
+        chapterRef,
+        deletedState,
+        { merge: true },
+      );
+      transaction.set(
+        bookRef,
+        this.bookStateFromChapters(book, updatedChapters, timestamp),
+        { merge: true },
+      );
+      return {
+        bookId,
+        chapterId: safeChapterId,
+        deleted: true,
+        generationStatus: DELETED,
+      };
+    });
+  }
+
   assertOwnsUserCreatedBook(book, creatorUid) {
     if (book.creatorUid !== creatorUid) {
       throw forbidden();
     }
     if (book.createdByUser === false) {
+      throw forbidden();
+    }
+  }
+
+  assertOwnsExplicitUserCreatedBook(book, creatorUid) {
+    if (book.creatorUid !== creatorUid) {
+      throw forbidden();
+    }
+    if (book.createdByUser !== true) {
       throw forbidden();
     }
   }
@@ -510,6 +641,9 @@ export class FirestoreAudiobookRepository {
         transaction.get(chapterRef),
       ]);
       if (!bookSnapshot.exists || !chapterSnapshot.exists) {
+        return false;
+      }
+      if (isDeletedChapter(chapterSnapshot.data())) {
         return false;
       }
       transaction.set(
@@ -563,6 +697,9 @@ export class FirestoreAudiobookRepository {
         transaction.get(chaptersRef),
       ]);
       if (!bookSnapshot.exists || !chapterSnapshot.exists) {
+        return false;
+      }
+      if (isDeletedChapter(chapterSnapshot.data())) {
         return false;
       }
       const book = bookSnapshot.data();
