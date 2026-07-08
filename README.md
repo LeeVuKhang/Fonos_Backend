@@ -5,14 +5,21 @@ Demo Node.js + Express backend for user-generated audiobooks in the Android emul
 ## What it does
 
 - Verifies Firebase ID tokens from Android.
-- Creates trusted Firestore `books/{bookId}` and `chapters/chapter_1` documents.
+- Creates and updates trusted Firestore `books/{bookId}` and
+  `books/{bookId}/chapters/{chapterId}` documents while deriving ownership
+  from the verified token.
+- Supports creator draft editing, follow-up chapter drafts, chapter deletion or
+  cancellation, publication, and Public/Private visibility toggles.
 - Queues one in-process AWS Polly generation job at a time.
 - Starts Amazon Polly Long-form tasks that write one MP3 directly to S3, then
   polls task status and writes the returned `audioUrl` back to Firestore.
 - Sends best-effort FCM data notifications when generation reaches
   `ready_for_review` or `failed`.
 
-Generated books remain `published=false` and move to `ready_for_review` for creator preview only.
+Generated books remain `published=false` until the creator publishes
+ready-for-review audio from Android My Uploads. Published user-generated books
+can later be hidden with `hiddenByCreator=true` without deleting their My
+Uploads record.
 
 ## Setup
 
@@ -90,10 +97,15 @@ manually uploads an MP3. Public playback depends on the bucket policy above.
 
 ## API
 
-All `/api/v1/*` endpoints require:
+All `/api/v1/*` endpoints require Firebase authentication:
 
 ```text
 Authorization: Bearer <Firebase ID token>
+```
+
+Endpoints with JSON request bodies also require:
+
+```text
 Content-Type: application/json
 ```
 
@@ -121,9 +133,125 @@ Creates a draft and `chapter_1`.
 
 Returns `201 Created` with `Location: /api/v1/audiobooks/{bookId}`.
 
+Response:
+
+```json
+{ "data": { "bookId": "book-1", "generationStatus": "draft" } }
+```
+
+### `GET /api/v1/audiobooks/{bookId}/draft`
+
+Returns an owned audiobook draft for Android edit mode.
+
+```json
+{
+  "data": {
+    "bookId": "book-1",
+    "title": "My Demo Audiobook",
+    "author": "Student Name",
+    "coverUrl": "https://example.com/cover.jpg",
+    "chapterTitle": "Chapter 1",
+    "chapterText": "Original source text.",
+    "languageCode": "en-US",
+    "voiceId": "Patrick",
+    "generationStatus": "draft"
+  }
+}
+```
+
+### `PUT /api/v1/audiobooks/{bookId}/draft`
+
+Updates the owned initial audiobook draft with the same body contract as
+`POST /api/v1/audiobooks`.
+
+```json
+{ "data": { "bookId": "book-1", "generationStatus": "draft" } }
+```
+
+### `POST /api/v1/audiobooks/{bookId}/chapters`
+
+Creates a follow-up chapter draft on an owned user-generated audiobook.
+
+```json
+{
+  "chapterTitle": "Chapter 2",
+  "chapterText": "Text to synthesize. Max 3500 words.",
+  "languageCode": "en-US",
+  "voiceId": "Ruth"
+}
+```
+
+Returns `201 Created` with
+`Location: /api/v1/audiobooks/{bookId}/chapters/{chapterId}`.
+
+```json
+{
+  "data": {
+    "bookId": "book-1",
+    "chapterId": "chapter_2",
+    "generationStatus": "draft"
+  }
+}
+```
+
+### `GET /api/v1/audiobooks/{bookId}/chapters/{chapterId}/draft`
+
+Returns an owned chapter draft for Android edit mode.
+
+```json
+{
+  "data": {
+    "bookId": "book-1",
+    "chapterId": "chapter_2",
+    "bookTitle": "My Demo Audiobook",
+    "chapterTitle": "Chapter 2",
+    "chapterText": "Original chapter source text.",
+    "languageCode": "en-US",
+    "voiceId": "Ruth",
+    "generationStatus": "draft"
+  }
+}
+```
+
+### `PUT /api/v1/audiobooks/{bookId}/chapters/{chapterId}/draft`
+
+Updates an owned draft chapter with the same body contract as
+`POST /api/v1/audiobooks/{bookId}/chapters`.
+
+```json
+{
+  "data": {
+    "bookId": "book-1",
+    "chapterId": "chapter_2",
+    "generationStatus": "draft"
+  }
+}
+```
+
 ### `POST /api/v1/audiobooks/{bookId}/generation-jobs`
 
-Transitions an owned `draft` or `failed` audiobook to `pending_generation`, returns `202 Accepted`, then processes Polly/S3 work in the background.
+Transitions the active owned `draft` or `failed` audiobook chapter to
+`pending_generation`, returns `202 Accepted`, then processes Polly/S3 work in
+the background.
+
+```json
+{ "data": { "bookId": "book-1", "generationStatus": "pending_generation" } }
+```
+
+### `POST /api/v1/audiobooks/{bookId}/chapters/{chapterId}/generation-jobs`
+
+Transitions an owned `draft` or `failed` chapter to `pending_generation`,
+returns `202 Accepted`, then processes Polly/S3 work in the background.
+
+```json
+{
+  "data": {
+    "bookId": "book-1",
+    "chapterId": "chapter_2",
+    "generationStatus": "pending_generation"
+  }
+}
+```
 
 The worker uses fixed synthesis settings: `us-east-1`, Long-form, plain text,
 MP3 at 24 kHz, with either `Ruth` (female) or `Patrick` (male). Android does not
@@ -152,6 +280,69 @@ clickTarget: my_uploads
 
 The payload excludes source chapter text and `generationError`; notification
 delivery failure is logged but does not fail the generation job.
+
+### `POST /api/v1/audiobooks/{bookId}/publications`
+
+Publishes all owned ready-for-review chapters with generated audio and marks the
+book published. This is the backend path used by Android's Publish Audiobook
+and Publish Update actions.
+
+```json
+{
+  "data": {
+    "bookId": "book-1",
+    "generationStatus": "published",
+    "published": true
+  }
+}
+```
+
+At least one chapter must be `ready_for_review` with an `audioUrl`. Published
+chapters cannot be deleted in the current version.
+
+### `PATCH /api/v1/audiobooks/{bookId}/visibility`
+
+Toggles whether an owned user-generated audiobook is hidden from the public
+catalog while staying visible to its creator in My Uploads.
+
+```json
+{ "hiddenByCreator": true }
+```
+
+```json
+{ "data": { "bookId": "book-1", "hiddenByCreator": true } }
+```
+
+### `DELETE /api/v1/audiobooks/{bookId}/chapters/{chapterId}`
+
+Soft-deletes an owned non-published chapter. Android labels this as Delete for
+draft/failed/ready chapters and Cancel Chapter for pending chapters. Generation
+may finish later, but the backend ignores terminal writes for deleted chapters.
+
+```json
+{
+  "data": {
+    "bookId": "book-1",
+    "chapterId": "chapter_2",
+    "deleted": true,
+    "generationStatus": "deleted"
+  }
+}
+```
+
+## Status Model
+
+The backend and Android client use these generation status values:
+
+| Status | Meaning |
+|---|---|
+| `draft` | Creator-owned draft content can still be edited or queued. |
+| `pending_generation` | Polly generation is queued, scheduled, or in progress. |
+| `failed` | Generation failed with a bounded sanitized reason and can be retried. |
+| `ready_for_review` | Audio generation succeeded and the creator can preview it. |
+| `published` | Ready audio has been published to the public catalog unless hidden. |
+| `rejected` | Reserved for a future moderation workflow. |
+| `deleted` | Non-published chapter was soft-deleted or canceled by the creator. |
 
 ## Verification
 
