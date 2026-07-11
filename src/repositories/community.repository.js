@@ -82,7 +82,9 @@ export class FirestoreCommunityRepository {
       );
       const ratingAverage = ratingCount === 0 ? 0 : ratingSum / ratingCount;
       const timestamp = this.timestamp();
-      const reviewerDisplayName = cleanDisplayName(userSnapshot.exists ? userSnapshot.data()?.displayName : null);
+      const reviewerDisplayName = previous
+        ? cleanDisplayName(previous.reviewerDisplayName)
+        : cleanDisplayName(userSnapshot.exists ? userSnapshot.data()?.displayName : null);
       const review = {
         reviewerDisplayName,
         rating: input.rating,
