@@ -132,11 +132,24 @@ Reviews are stored at `books/{bookId}/reviews/{uid}`. Star-only reviews affect
 the rating aggregates but are excluded from the written-review feed. All
 timestamps and aggregates are server controlled.
 
+The written-review query needs the composite index declared in
+`firestore.indexes.json`: collection `reviews`, collection scope,
+`hasComment ASC`, `createdAt DESC`, and `__name__ DESC`. Review writes do not
+use this index, so `PUT` can succeed while `GET` returns Firestore
+`FAILED_PRECONDITION` if the index has not reached `READY`.
+
 ### Firestore cutover and backfill
 
 `firestore.rules`, `firestore.indexes.json`, and `firebase.json` version the
 community security boundary and review index. Deploy them during the Android
 cutover; old Android builds can no longer write saved membership directly.
+
+For Firebase project `fonos-group13-44726`, the review index was deployed and
+verified `READY` on 2026-07-11. Deploying only indexes does not update rules:
+
+```powershell
+npx firebase deploy --only firestore:indexes --project fonos-group13-44726
+```
 
 After direct writes are blocked, preview the exact saved-membership backfill:
 
@@ -404,3 +417,7 @@ curl http://localhost:8080/health
 ```
 
 Then run the Android debug app with `BACKEND_BASE_URL=http://10.0.2.2:8080` in the Android project's `local.properties`.
+
+The deployed review index was also verified with the production repository
+query: `pride_prejudice` returned one written review with the expected public
+review shape and no pagination cursor.
