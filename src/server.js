@@ -6,7 +6,9 @@ import { GenerationQueue, recoverPendingGenerationJobs } from "./jobs/generation
 import { createAwsClients } from "./lib/awsClients.js";
 import { createFirebaseAdmin } from "./lib/firebaseAdmin.js";
 import { FirestoreAudiobookRepository } from "./repositories/audiobook.repository.js";
+import { FirestoreCommunityRepository } from "./repositories/community.repository.js";
 import { AudiobookService } from "./services/audiobook.service.js";
+import { CommunityService } from "./services/community.service.js";
 import { AwsAudioService } from "./services/aws.service.js";
 import { GenerationService } from "./services/generation.service.js";
 import { GenerationNotificationService } from "./services/generationNotification.service.js";
@@ -42,10 +44,18 @@ async function main() {
     logger,
   });
   const audiobookService = new AudiobookService({ repository, queue });
+  const communityRepository = new FirestoreCommunityRepository({
+    firestore: firebase.firestore,
+    serverTimestamp: firebase.serverTimestamp,
+    documentIdField: firebase.documentIdField,
+    logger,
+  });
+  const communityService = new CommunityService({ repository: communityRepository });
   const app = createApp({
     config,
     verifyIdToken: firebase.verifyIdToken,
     audiobookService,
+    communityService,
     logger,
   });
 
