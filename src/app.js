@@ -4,11 +4,13 @@ import pinoHttp from "pino-http";
 import { AppError, errorHandler } from "./errors.js";
 import { firebaseAuth } from "./middleware/firebaseAuth.js";
 import { audiobookRoutes } from "./routes/audiobooks.routes.js";
+import { communityRoutes } from "./routes/community.routes.js";
 
 export function createApp({
   config,
   verifyIdToken,
   audiobookService,
+  communityService,
   logger,
   protectedRateLimitMax = 60,
   generationRateLimitMax = 10,
@@ -29,6 +31,9 @@ export function createApp({
     "/api/v1",
     audiobookRoutes({ audiobookService, protectedRateLimitMax, generationRateLimitMax }),
   );
+  if (communityService) {
+    app.use("/api/v1", communityRoutes({ communityService }));
+  }
 
   app.use((_request, _response, next) => {
     next(new AppError(404, "not_found", "Route not found"));
