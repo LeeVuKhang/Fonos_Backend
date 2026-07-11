@@ -1,0 +1,50 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsUser(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    match /books/{bookId} {
+      allow read: if signedIn();
+      allow write: if false;
+
+      match /chapters/{chapterId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+
+      match /reviews/{reviewId} {
+        allow read, write: if false;
+      }
+    }
+
+    match /users/{uid} {
+      allow read: if ownsUser(uid);
+      allow create: if ownsUser(uid)
+        && request.resource.data.keys().hasOnly(['email', 'displayName', 'createdAt', 'updatedAt']);
+      allow update: if ownsUser(uid)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['email', 'displayName', 'createdAt', 'updatedAt']);
+      allow delete: if false;
+
+      match /savedBooks/{bookId} {
+        allow read: if ownsUser(uid);
+        allow write: if false;
+      }
+
+      match /progress/{progressId} {
+        allow read, write: if ownsUser(uid);
+      }
+
+      match /notificationTokens/{tokenId} {
+        allow read, write: if ownsUser(uid);
+      }
+    }
+  }
+}
