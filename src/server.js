@@ -1,10 +1,9 @@
-import pino from "pino";
-
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { GenerationQueue, recoverPendingGenerationJobs } from "./jobs/generationQueue.js";
 import { createAwsClients } from "./lib/awsClients.js";
 import { createFirebaseAdmin } from "./lib/firebaseAdmin.js";
+import { createAppLogger } from "./logger.js";
 import { FirestoreAudiobookRepository } from "./repositories/audiobook.repository.js";
 import { FirestoreCommunityRepository } from "./repositories/community.repository.js";
 import { AudiobookService } from "./services/audiobook.service.js";
@@ -15,7 +14,7 @@ import { GenerationNotificationService } from "./services/generationNotification
 
 async function main() {
   const config = loadConfig();
-  const logger = pino({ level: config.nodeEnv === "test" ? "silent" : "info" });
+  const logger = createAppLogger({ level: config.nodeEnv === "test" ? "silent" : "info" });
   const firebase = createFirebaseAdmin({ projectId: config.firebaseProjectId });
   const awsClients = createAwsClients({ region: config.awsRegion });
 
