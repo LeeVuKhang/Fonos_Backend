@@ -107,6 +107,7 @@ describe("FirestoreCommunityRepository", () => {
     });
 
     const created = await repository.upsertReview("book-1", "user-1", { rating: 5, comment: " Great " });
+    documents.set("users/user-1", { displayName: "Renamed later" });
     const updated = await repository.upsertReview("book-1", "user-1", { rating: 3, comment: null });
 
     expect(created).toMatchObject({ ratingAverage: 5, ratingCount: 1 });
