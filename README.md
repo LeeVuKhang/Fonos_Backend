@@ -15,6 +15,10 @@ Demo Node.js + Express backend for user-generated audiobooks in the Android emul
   polls task status and writes the returned `audioUrl` back to Firestore.
 - Sends best-effort FCM data notifications when generation reaches
   `ready_for_review` or `failed`.
+- Owns book-level review and saved-library mutations, maintaining
+  `ratingSum`, `ratingAverage`, `ratingCount`, and `saveCount` transactionally.
+- Lists comment-bearing reviews with cursor pagination while returning the
+  caller's review separately so rating-only submissions remain editable.
 
 Generated books remain `published=false` until the creator publishes
 ready-for-review audio from Android My Uploads. Published user-generated books
@@ -108,6 +112,46 @@ Endpoints with JSON request bodies also require:
 ```text
 Content-Type: application/json
 ```
+
+### Community reviews and saved books
+
+| Method | Endpoint | Behavior |
+|---|---|---|
+| `GET` | `/api/v1/audiobooks/{bookId}/reviews?limit=10&cursor=...` | Lists written reviews newest-first and returns `viewerReview`, `nextCursor`, and `hasMore`. |
+| `PUT` | `/api/v1/audiobooks/{bookId}/reviews/me` | Creates or replaces the caller's review from `{ "rating": 1..5, "comment": string|null }`. |
+| `DELETE` | `/api/v1/audiobooks/{bookId}/reviews/me` | Hard-deletes the caller's review idempotently. |
+| `PUT` | `/api/v1/users/me/saved-books/{bookId}` | Adds saved membership idempotently and increments `saveCount` once. |
+| `DELETE` | `/api/v1/users/me/saved-books/{bookId}` | Removes saved membership idempotently and decrements `saveCount` once. |
+
+Only published, visible books accept community operations, and creators cannot
+review their own uploads. Reviewer display names are read from `users/{uid}` by
+the backend and stored as submission-time snapshots; client-supplied identity
+or aggregate fields are ignored.
+
+Reviews are stored at `books/{bookId}/reviews/{uid}`. Star-only reviews affect
+the rating aggregates but are excluded from the written-review feed. All
+timestamps and aggregates are server controlled.
+
+### Firestore cutover and backfill
+
+`firestore.rules`, `firestore.indexes.json`, and `firebase.json` version the
+community security boundary and review index. Deploy them during the Android
+cutover; old Android builds can no longer write saved membership directly.
+
+After direct writes are blocked, preview the exact saved-membership backfill:
+
+```powershell
+npm run migrate:community-metrics
+```
+
+Apply the plan only after reviewing the book and membership counts:
+
+```powershell
+npm run migrate:community-metrics -- --apply
+```
+
+The script initializes missing rating fields without discarding valid existing
+aggregates and recomputes each book's current unique `saveCount`.
 
 ### `GET /health`
 
@@ -348,6 +392,7 @@ The backend and Android client use these generation status values:
 
 ```powershell
 npm test
+npm run test:rules
 npm run test:coverage
 npm audit --omit=dev
 ```

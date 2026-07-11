@@ -10,9 +10,9 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "vitest run",
+    "test": "vitest run --exclude test/firestore.rules.test.js",
     "test:rules": "firebase emulators:exec --only firestore \"vitest run test/firestore.rules.test.js\"",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --exclude test/firestore.rules.test.js",
     "migrate:community-metrics": "node scripts/backfillCommunityMetrics.js"
   },
   "dependencies": {
