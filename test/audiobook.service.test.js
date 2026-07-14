@@ -118,6 +118,23 @@ describe("AudiobookService", () => {
     expect(queue.enqueue).not.toHaveBeenCalled();
   });
 
+  it("enqueues AI indexing only after publication succeeds", async () => {
+    const repository = {
+      publish: vi.fn().mockResolvedValue({ bookId: "book-1", published: true }),
+    };
+    const queue = { enqueue: vi.fn() };
+    const aiIndexQueue = { enqueue: vi.fn() };
+    const service = new AudiobookService({ repository, queue, aiIndexQueue });
+
+    await service.publishAudiobook("book-1", "user-1");
+
+    expect(aiIndexQueue.enqueue).toHaveBeenCalledWith({ bookId: "book-1" });
+
+    repository.publish.mockRejectedValueOnce(new AppError(409, "invalid", "no"));
+    await expect(service.publishAudiobook("book-1", "user-1")).rejects.toThrow();
+    expect(aiIndexQueue.enqueue).toHaveBeenCalledTimes(1);
+  });
+
   it("toggles audiobook visibility through the repository without enqueueing generation", async () => {
     const repository = {
       setVisibility: vi.fn().mockResolvedValue({

@@ -51,4 +51,18 @@ describe("Firestore client boundaries", () => {
     await assertFails(setDoc(doc(database, "books/book-1/reviews/user-1"), { rating: 5 }));
     await assertFails(setDoc(doc(database, "users/user-1/savedBooks/book-2"), { bookId: "book-2" }));
   });
+
+  it("denies Android reads and writes to private AI versions, chunks, and summaries", async () => {
+    const database = environment.authenticatedContext("user-1").firestore();
+    const version = doc(database, "books/book-1/aiIndexVersions/hash-1");
+    const chunk = doc(database, "books/book-1/aiIndexVersions/hash-1/aiChunks/chunk-1");
+    const summary = doc(database, "books/book-1/aiIndexVersions/hash-1/aiSummaries/book_en");
+
+    await assertFails(getDoc(version));
+    await assertFails(getDoc(chunk));
+    await assertFails(getDoc(summary));
+    await assertFails(setDoc(version, { status: "active" }));
+    await assertFails(setDoc(chunk, { text: "private source text" }));
+    await assertFails(setDoc(summary, { answer: "private summary" }));
+  });
 });

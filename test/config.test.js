@@ -25,6 +25,12 @@ describe("loadConfig", () => {
       s3Bucket: "fonos-demo-audio",
       pollyTaskPollIntervalMs: 2000,
       maxChapterTextWords: 3500,
+      geminiChatModel: "gemini-3.5-flash",
+      geminiEmbeddingModel: "gemini-embedding-2",
+      aiEmbeddingDimension: 768,
+      aiRateLimitPerMinute: 10,
+      aiDailyLimit: 100,
+      aiProviderTimeoutMs: 25000,
     });
   });
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 const host = "127.0.0.1";
-const port = 8080;
+const port = 8081;
 const firebaseCli = path.resolve("node_modules/firebase-tools/lib/bin/firebase.js");
 const vitestCli = path.resolve("node_modules/vitest/vitest.mjs");
 const emulator = spawn(process.execPath, [
