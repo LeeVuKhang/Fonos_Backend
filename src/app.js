@@ -5,15 +5,19 @@ import { AppError, errorHandler } from "./errors.js";
 import { firebaseAuth } from "./middleware/firebaseAuth.js";
 import { audiobookRoutes } from "./routes/audiobooks.routes.js";
 import { communityRoutes } from "./routes/community.routes.js";
+import { aiRoutes } from "./routes/ai.routes.js";
 
 export function createApp({
   config,
   verifyIdToken,
   audiobookService,
   communityService,
+  aiResponseService,
   logger,
   protectedRateLimitMax = 60,
   generationRateLimitMax = 10,
+  aiRateLimitPerMinute = 10,
+  aiDailyLimit = 100,
 }) {
   const app = express();
   app.disable("x-powered-by");
@@ -27,6 +31,13 @@ export function createApp({
   });
 
   app.use("/api/v1", firebaseAuth(verifyIdToken));
+  if (aiResponseService) {
+    app.use("/api/v1", aiRoutes({
+      aiResponseService,
+      perMinuteLimit: aiRateLimitPerMinute,
+      dailyLimit: aiDailyLimit,
+    }));
+  }
   app.use(
     "/api/v1",
     audiobookRoutes({ audiobookService, protectedRateLimitMax, generationRateLimitMax }),

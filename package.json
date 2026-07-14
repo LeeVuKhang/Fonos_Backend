@@ -13,10 +13,12 @@
     "test": "vitest run --exclude test/firestore.rules.test.js",
     "test:rules": "node scripts/runFirestoreRulesTests.js",
     "test:coverage": "vitest run --coverage --exclude test/firestore.rules.test.js",
-    "migrate:community-metrics": "node scripts/backfillCommunityMetrics.js"
+    "migrate:community-metrics": "node scripts/backfillCommunityMetrics.js",
+    "ai:index": "node scripts/indexAiBooks.js"
   },
   "dependencies": {
     "@aws-sdk/client-polly": "^3.1073.0",
+    "@google/genai": "^2.11.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",

@@ -10,6 +10,13 @@ const environmentSchema = z.object({
   S3_BUCKET: z.string().trim().min(1),
   POLLY_TASK_POLL_INTERVAL_MS: z.coerce.number().int().min(1).default(2000),
   MAX_CHAPTER_TEXT_WORDS: z.coerce.number().int().min(1).max(3500).default(3500),
+  GEMINI_API_KEY: z.string().trim().default(""),
+  GEMINI_CHAT_MODEL: z.string().trim().min(1).default("gemini-3.5-flash"),
+  GEMINI_EMBEDDING_MODEL: z.string().trim().min(1).default("gemini-embedding-2"),
+  AI_EMBEDDING_DIMENSION: z.coerce.number().int().min(1).max(2048).default(768),
+  AI_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(10),
+  AI_DAILY_LIMIT: z.coerce.number().int().min(1).default(100),
+  AI_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(1000).default(25000),
 }).superRefine((value, context) => {
   if (value.AWS_REGION !== "us-east-1") {
     context.addIssue({
@@ -38,5 +45,12 @@ export function loadConfig(environment = process.env) {
     s3Bucket: value.S3_BUCKET,
     pollyTaskPollIntervalMs: value.POLLY_TASK_POLL_INTERVAL_MS,
     maxChapterTextWords: value.MAX_CHAPTER_TEXT_WORDS,
+    geminiApiKey: value.GEMINI_API_KEY,
+    geminiChatModel: value.GEMINI_CHAT_MODEL,
+    geminiEmbeddingModel: value.GEMINI_EMBEDDING_MODEL,
+    aiEmbeddingDimension: value.AI_EMBEDDING_DIMENSION,
+    aiRateLimitPerMinute: value.AI_RATE_LIMIT_PER_MINUTE,
+    aiDailyLimit: value.AI_DAILY_LIMIT,
+    aiProviderTimeoutMs: value.AI_PROVIDER_TIMEOUT_MS,
   });
 }

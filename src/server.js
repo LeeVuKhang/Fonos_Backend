@@ -1,16 +1,21 @@
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { GenerationQueue, recoverPendingGenerationJobs } from "./jobs/generationQueue.js";
+import { AiIndexQueue, recoverInterruptedAiIndexes } from "./jobs/aiIndexQueue.js";
 import { createAwsClients } from "./lib/awsClients.js";
 import { createFirebaseAdmin } from "./lib/firebaseAdmin.js";
 import { createAppLogger } from "./logger.js";
 import { FirestoreAudiobookRepository } from "./repositories/audiobook.repository.js";
 import { FirestoreCommunityRepository } from "./repositories/community.repository.js";
+import { FirestoreAiRepository } from "./repositories/ai.repository.js";
 import { AudiobookService } from "./services/audiobook.service.js";
 import { CommunityService } from "./services/community.service.js";
 import { AwsAudioService } from "./services/aws.service.js";
 import { GenerationService } from "./services/generation.service.js";
 import { GenerationNotificationService } from "./services/generationNotification.service.js";
+import { GeminiAiService } from "./services/geminiAi.service.js";
+import { AiIndexService } from "./services/aiIndex.service.js";
+import { AiResponseService } from "./services/aiResponse.service.js";
 
 async function main() {
   const config = loadConfig();
@@ -42,7 +47,34 @@ async function main() {
     worker: (job) => generationService.process(job),
     logger,
   });
-  const audiobookService = new AudiobookService({ repository, queue });
+  const aiRepository = new FirestoreAiRepository({
+    firestore: firebase.firestore,
+    serverTimestamp: firebase.serverTimestamp,
+  });
+  const aiProvider = new GeminiAiService({
+    apiKey: config.geminiApiKey,
+    chatModel: config.geminiChatModel,
+    embeddingModel: config.geminiEmbeddingModel,
+    embeddingDimension: config.aiEmbeddingDimension,
+    timeoutMs: config.aiProviderTimeoutMs,
+  });
+  const aiIndexService = new AiIndexService({
+    repository: aiRepository,
+    aiProvider,
+    embeddingModel: config.geminiEmbeddingModel,
+    embeddingDimension: config.aiEmbeddingDimension,
+    logger,
+  });
+  const aiIndexQueue = new AiIndexQueue({
+    worker: ({ bookId, force }) => aiIndexService.indexBook(bookId, { force }),
+    logger,
+  });
+  const aiResponseService = new AiResponseService({
+    repository: aiRepository,
+    aiProvider,
+    logger,
+  });
+  const audiobookService = new AudiobookService({ repository, queue, aiIndexQueue });
   const communityRepository = new FirestoreCommunityRepository({
     firestore: firebase.firestore,
     serverTimestamp: firebase.serverTimestamp,
@@ -55,10 +87,14 @@ async function main() {
     verifyIdToken: firebase.verifyIdToken,
     audiobookService,
     communityService,
+    aiResponseService,
+    aiRateLimitPerMinute: config.aiRateLimitPerMinute,
+    aiDailyLimit: config.aiDailyLimit,
     logger,
   });
 
   await recoverPendingGenerationJobs({ repository, queue, logger });
+  await recoverInterruptedAiIndexes({ repository: aiRepository, queue: aiIndexQueue, logger });
 
   const server = app.listen(config.port, config.host, () => {
     logger.info({ host: config.host, port: config.port }, "Fonos audiobook backend listening");

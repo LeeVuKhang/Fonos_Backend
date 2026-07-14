@@ -22,6 +22,18 @@ service cloud.firestore {
       match /reviews/{reviewId} {
         allow read, write: if false;
       }
+
+      match /aiIndexVersions/{versionId} {
+        allow read, write: if false;
+
+        match /aiChunks/{chunkId} {
+          allow read, write: if false;
+        }
+
+        match /aiSummaries/{summaryId} {
+          allow read, write: if false;
+        }
+      }
     }
 
     match /users/{uid} {

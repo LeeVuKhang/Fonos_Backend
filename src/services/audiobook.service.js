@@ -1,9 +1,10 @@
 const VOICE_GENDERS = Object.freeze({ Ruth: "female", Patrick: "male" });
 
 export class AudiobookService {
-  constructor({ repository, queue }) {
+  constructor({ repository, queue, aiIndexQueue }) {
     this.repository = repository;
     this.queue = queue;
+    this.aiIndexQueue = aiIndexQueue;
   }
 
   async createDraft(creatorUid, input) {
@@ -58,7 +59,9 @@ export class AudiobookService {
   }
 
   async publishAudiobook(bookId, creatorUid) {
-    return this.repository.publish(bookId, creatorUid);
+    const result = await this.repository.publish(bookId, creatorUid);
+    this.aiIndexQueue?.enqueue?.({ bookId });
+    return result;
   }
 
   async setAudiobookVisibility(bookId, creatorUid, hiddenByCreator) {

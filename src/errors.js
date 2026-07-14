@@ -50,6 +50,23 @@ export function invalidChapterDeleteState() {
   );
 }
 
+export function aiNotReady(reason = "unavailable") {
+  return new AppError(
+    409,
+    "ai_not_ready",
+    "AI content is not ready for this audiobook",
+    { reason },
+  );
+}
+
+export function aiProviderUnavailable() {
+  return new AppError(
+    503,
+    "ai_provider_unavailable",
+    "The AI service is temporarily unavailable. Please try again.",
+  );
+}
+
 function zodDetails(error) {
   return error.issues.map((issue) => ({
     field: issue.path.join("."),
