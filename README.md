@@ -19,6 +19,8 @@ Demo Node.js + Express backend for user-generated audiobooks in the Android emul
   `ratingSum`, `ratingAverage`, `ratingCount`, and `saveCount` transactionally.
 - Lists comment-bearing reviews with cursor pagination while returning the
   caller's review separately so rating-only submissions remain editable.
+- Indexes complete published chapter `sourceText` with Gemini embeddings and
+  serves grounded book/chapter summaries and Q&amp;A with backend-owned citations.
 
 Generated books remain `published=false` until the creator publishes
 ready-for-review audio from Android My Uploads. Published user-generated books
@@ -33,7 +35,10 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-Fill `.env` with your Firebase project ID, Firebase Admin service-account path, AWS profile and S3 bucket. Do not commit `.env`, service account JSON files, or AWS keys.
+Fill `.env` with your Firebase project ID, Firebase Admin service-account path,
+AWS profile, S3 bucket, and backend-only `GEMINI_API_KEY`. The defaults use
+`gemini-3.5-flash`, `gemini-embedding-2`, and 768-dimensional embeddings. Do
+not commit `.env`, service account JSON files, Gemini keys, or AWS keys.
 
 The server listens on `0.0.0.0:8080` by default. Port `5555` is reserved by the
 Android Emulator/ADB and can cause connections to close without an HTTP response.
@@ -128,6 +133,37 @@ review their own uploads. Reviewer display names are read from `users/{uid}` by
 the backend and stored as submission-time snapshots; client-supplied identity
 or aggregate fields are ignored.
 
+### AI summaries and book Q&amp;A
+
+`POST /api/v1/audiobooks/{bookId}/ai/responses` accepts a summary or question:
+
+```json
+{
+  "mode": "question",
+  "scope": { "type": "chapter", "chapterId": "chapter_2" },
+  "question": "Why did the character leave home?",
+  "locale": "auto",
+  "history": [
+    { "role": "user", "text": "Who is the main character?" },
+    { "role": "assistant", "text": "..." }
+  ]
+}
+```
+
+Use `{ "mode": "summary", "scope": { "type": "book" }, "locale": "en" }`
+for a whole-book summary. Questions are limited to 1,000 characters and history
+to 12 user/assistant messages. The backend retrieves eight chunks for Q&amp;A;
+whole-book summaries instead summarize every published chapter and synthesize
+those summaries in order. Responses include the active content version and
+short excerpts copied from validated indexed chunks.
+
+Only signed-in users may query published, visible, AI-ready books. Drafts,
+creator previews, hidden books, and unknown chapters are rejected. Expected AI
+errors are `409 ai_not_ready`, `429 ai_rate_limit_exceeded`, and
+`503 ai_provider_unavailable`. Per-UID defaults are 10 requests per minute and
+100 per day; configure them with `AI_RATE_LIMIT_PER_MINUTE` and
+`AI_DAILY_LIMIT` for the demo.
+
 Reviews are stored at `books/{bookId}/reviews/{uid}`. Star-only reviews affect
 the rating aggregates but are excluded from the written-review feed. All
 timestamps and aggregates are server controlled.
@@ -141,15 +177,20 @@ use this index, so `PUT` can succeed while `GET` returns Firestore
 ### Firestore cutover and backfill
 
 `firestore.rules`, `firestore.indexes.json`, and `firebase.json` version the
-community security boundary and review index. Deploy them during the Android
-cutover; old Android builds can no longer write saved membership directly.
+community security boundary, review index, and AI vector indexes. Deploy them
+during the Android cutover; Android is explicitly denied access to AI versions,
+chunks, and summary caches.
 
 For Firebase project `fonos-group13-44726`, the review index was deployed and
 verified `READY` on 2026-07-11. Deploying only indexes does not update rules:
 
 ```powershell
 npx firebase deploy --only firestore:indexes --project fonos-group13-44726
+npx firebase deploy --only firestore:rules --project fonos-group13-44726
 ```
+
+Wait until both 768-dimensional `aiChunks.embedding` vector indexes are ready:
+one supports book-wide KNN queries and one adds the `chapterId` prefilter.
 
 After direct writes are blocked, preview the exact saved-membership backfill:
 
@@ -165,6 +206,37 @@ npm run migrate:community-metrics -- --apply
 
 The script initializes missing rating fields without discarding valid existing
 aggregates and recomputes each book's current unique `saveCount`.
+
+### AI indexing lifecycle and backfill
+
+Published books expose `aiStatus` as `unavailable`, `indexing`, `ready`, or
+`failed`, plus `aiStatusReason`, `aiActiveVersion`, and `aiIndexedAt`. Indexes
+are immutable under
+`books/{bookId}/aiIndexVersions/{contentHash}/aiChunks/{chunkId}`. A build is
+activated in a transaction only when the published source still has the same
+SHA-256 content hash. The previous version is retained for rollback; older
+inactive versions are removed after activation.
+
+Every published chapter must have non-blank, complete `sourceText`. After
+backfilling it, run either:
+
+```powershell
+npm run ai:index -- --all
+npm run ai:index -- --book-id=book-1
+npm run ai:index -- --book-id=book-1 --force
+```
+
+Publication enqueues indexing asynchronously. Server startup also re-enqueues
+books left in `indexing`. Unchanged ready books are skipped unless `--force` is
+used. A book with missing source becomes
+`unavailable/missing_source_text`; provider or activation failures become
+`failed` with a sanitized reason.
+
+If queries return `ai_not_ready`, inspect the book status and finish the
+backfill/index command. If Firestore reports `FAILED_PRECONDITION`, deploy the
+vector indexes and wait for them to reach `READY`. If the API returns
+`ai_provider_unavailable`, verify `GEMINI_API_KEY`, model names, network access,
+and the 25-second provider timeout.
 
 ### `GET /health`
 
@@ -401,6 +473,15 @@ The backend and Android client use these generation status values:
 | `rejected` | Reserved for a future moderation workflow. |
 | `deleted` | Non-published chapter was soft-deleted or canceled by the creator. |
 
+AI indexing has a separate lifecycle:
+
+| AI status | Meaning |
+|---|---|
+| `unavailable` | Complete published `sourceText` is missing or has never been indexed. |
+| `indexing` | An immutable content version is being built and validated. |
+| `ready` | `aiActiveVersion` points to a complete atomically activated index. |
+| `failed` | Indexing failed; inspect `aiStatusReason` and retry the backfill command. |
+
 ## Verification
 
 ```powershell
@@ -414,6 +495,7 @@ Manual smoke test after adding real credentials:
 
 ```powershell
 curl http://localhost:8080/health
+npm run ai:index -- --book-id=book-1
 ```
 
 Then run the Android debug app with `BACKEND_BASE_URL=http://10.0.2.2:8080` in the Android project's `local.properties`.
