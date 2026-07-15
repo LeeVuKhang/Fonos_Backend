@@ -30,7 +30,12 @@ describe("loadConfig", () => {
       aiEmbeddingDimension: 768,
       aiRateLimitPerMinute: 10,
       aiDailyLimit: 100,
-      aiProviderTimeoutMs: 25000,
+      aiProviderTimeoutMs: 12000,
+      aiResponseDeadlineMs: 30000,
+      aiProviderMaxAttempts: 2,
+      aiProviderRetryBaseMs: 400,
+      aiCircuitFailureThreshold: 3,
+      aiCircuitOpenMs: 30000,
     });
   });
 

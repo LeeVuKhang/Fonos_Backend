@@ -1,12 +1,13 @@
 import { ZodError } from "zod";
 
 export class AppError extends Error {
-  constructor(status, code, message, details) {
+  constructor(status, code, message, details, { retryAfterSeconds } = {}) {
     super(message);
     this.name = "AppError";
     this.status = status;
     this.code = code;
     this.details = details;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -59,11 +60,13 @@ export function aiNotReady(reason = "unavailable") {
   );
 }
 
-export function aiProviderUnavailable() {
+export function aiProviderUnavailable(retryAfterSeconds = 5) {
   return new AppError(
     503,
     "ai_provider_unavailable",
     "The AI service is temporarily unavailable. Please try again.",
+    undefined,
+    { retryAfterSeconds },
   );
 }
 
@@ -93,6 +96,9 @@ export function errorHandler(logger) {
     }
 
     if (error instanceof AppError) {
+      if (Number.isInteger(error.retryAfterSeconds) && error.retryAfterSeconds > 0) {
+        response.setHeader("Retry-After", String(error.retryAfterSeconds));
+      }
       const body = {
         code: error.code,
         message: error.message,

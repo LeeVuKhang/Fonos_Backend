@@ -115,4 +115,41 @@ describe("AiIndexService", () => {
       "content_changed_during_indexing",
     );
   });
+
+  it("warms unchanged ready books and keeps an active index ready when warming fails", async () => {
+    const repository = {
+      loadIndexableBook: vi.fn(),
+      markIndexing: vi.fn(),
+      writeVersion: vi.fn(),
+      activateVersion: vi.fn(),
+      cleanupVersions: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const aiProvider = {
+      embedDocuments: vi.fn(async (texts) => texts.map(() => [1, 0, 0])),
+    };
+    const summaryWarmer = vi.fn().mockRejectedValue(new Error("provider down"));
+    const service = new AiIndexService({
+      repository,
+      aiProvider,
+      embeddingModel: "embedding",
+      embeddingDimension: 3,
+      summaryWarmer,
+    });
+
+    repository.loadIndexableBook
+      .mockResolvedValueOnce(publishedBook())
+      .mockResolvedValueOnce(publishedBook());
+    const built = await service.indexBook("book-1");
+    expect(built).toMatchObject({ status: "ready", summaryWarmStatus: "failed" });
+    expect(repository.markFailed).not.toHaveBeenCalled();
+
+    repository.loadIndexableBook.mockResolvedValueOnce(publishedBook({
+      aiStatus: "ready",
+      aiActiveVersion: built.version,
+    }));
+    const skipped = await service.indexBook("book-1");
+    expect(skipped).toMatchObject({ skipped: true, summaryWarmStatus: "failed" });
+    expect(summaryWarmer).toHaveBeenCalledTimes(2);
+  });
 });

@@ -2,7 +2,7 @@ import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
-import { AppError } from "../src/errors.js";
+import { aiProviderUnavailable, AppError } from "../src/errors.js";
 
 function context({ perMinute = 100, daily = 100 } = {}) {
   const aiResponseService = {
@@ -95,5 +95,24 @@ describe("AI response API", () => {
 
     expect(dailyExceeded.status).toBe(429);
     expect(dailyExceeded.body.error.code).toBe("ai_rate_limit_exceeded");
+  });
+
+  it("keeps the provider error body stable and adds Retry-After", async () => {
+    const { app, aiResponseService } = context();
+    aiResponseService.respond.mockRejectedValueOnce(aiProviderUnavailable(17));
+
+    const response = await request(app)
+      .post("/api/v1/audiobooks/book-1/ai/responses")
+      .set("Authorization", "Bearer token")
+      .send({ mode: "summary", scope: { type: "book" }, locale: "en" });
+
+    expect(response.status).toBe(503);
+    expect(response.headers["retry-after"]).toBe("17");
+    expect(response.body).toEqual({
+      error: {
+        code: "ai_provider_unavailable",
+        message: "The AI service is temporarily unavailable. Please try again.",
+      },
+    });
   });
 });

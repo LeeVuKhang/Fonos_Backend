@@ -139,4 +139,73 @@ describe("AiResponseService", () => {
     }), expect.any(String));
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain("Why?");
   });
+
+  it("warms English chapter and whole-book summaries and serves later requests from cache", async () => {
+    const summaries = new Map();
+    const repository = {
+      getReadyBook: vi.fn().mockResolvedValue(readyBook()),
+      loadChunks: vi.fn((_bookId, _version, chapterId) => Promise.resolve(
+        chapterId ? chunks.filter((chunk) => chunk.chapterId === chapterId) : chunks,
+      )),
+      getSummary: vi.fn((_bookId, _version, scope, locale) =>
+        Promise.resolve(summaries.get(`${scope.type}:${scope.chapterId ?? "book"}:${locale}`) ?? null)),
+      saveSummary: vi.fn((_bookId, _version, scope, locale, value) => {
+        summaries.set(`${scope.type}:${scope.chapterId ?? "book"}:${locale}`, value);
+        return Promise.resolve();
+      }),
+    };
+    const aiProvider = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce({ answer: "Chapter one", notFound: false, citationChunkIds: [chunks[0].id] })
+        .mockResolvedValueOnce({ answer: "Chapter two", notFound: false, citationChunkIds: [chunks[1].id] })
+        .mockResolvedValueOnce({ answer: "Whole book", notFound: false, citationChunkIds: chunks.map((chunk) => chunk.id) }),
+    };
+    const service = new AiResponseService({ repository, aiProvider });
+
+    await expect(service.warmSummaryCache("book-1", { locales: ["en"] }))
+      .resolves.toMatchObject({ version: "version-1", locales: ["en"], chapterCount: 2 });
+    await expect(service.respond({
+      bookId: "book-1",
+      uid: "user-1",
+      input: { mode: "summary", scope: { type: "book" }, locale: "en", history: [] },
+    })).resolves.toMatchObject({ answer: "Whole book" });
+
+    expect([...summaries.keys()].sort()).toEqual([
+      "book:book:en",
+      "chapter:chapter_1:en",
+      "chapter:chapter_2:en",
+    ]);
+    expect(aiProvider.generateStructured).toHaveBeenCalledTimes(3);
+  });
+
+  it("coalesces concurrent summary generation for the same content version and scope", async () => {
+    let releaseFirst;
+    const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+    let calls = 0;
+    const repository = {
+      loadChunks: vi.fn().mockResolvedValue([chunks[0]]),
+      getSummary: vi.fn().mockResolvedValue(null),
+      saveSummary: vi.fn().mockResolvedValue(undefined),
+    };
+    const aiProvider = {
+      generateStructured: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) await firstGate;
+        return calls === 1
+          ? { answer: "Chapter one", notFound: false, citationChunkIds: [chunks[0].id] }
+          : { answer: "Whole book", notFound: false, citationChunkIds: [chunks[0].id] };
+      }),
+    };
+    const service = new AiResponseService({ repository, aiProvider });
+    const input = { mode: "summary", scope: { type: "book" }, locale: "en", history: [] };
+
+    const first = service.summarize(readyBook(), input);
+    const second = service.summarize(readyBook(), input);
+    await vi.waitFor(() => expect(aiProvider.generateStructured).toHaveBeenCalledTimes(1));
+    releaseFirst();
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+
+    expect(aiProvider.generateStructured).toHaveBeenCalledTimes(2);
+    expect(repository.saveSummary).toHaveBeenCalledTimes(2);
+  });
 });

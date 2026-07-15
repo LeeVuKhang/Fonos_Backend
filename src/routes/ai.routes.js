@@ -52,12 +52,35 @@ export function aiRoutes({ aiResponseService, perMinuteLimit, dailyLimit }) {
     dailyRateLimit(dailyLimit),
     validateAiResponse,
     async (request, response) => {
-      const result = await aiResponseService.respond({
-        bookId: request.params.bookId,
-        uid: request.auth.uid,
-        input: request.validatedBody,
-      });
-      return response.status(200).json({ data: result });
+      const controller = new AbortController();
+      const cancel = () => {
+        if (!response.writableEnded && !controller.signal.aborted) {
+          controller.abort(new Error("AI client disconnected"));
+        }
+      };
+      request.once("aborted", cancel);
+      response.once("close", cancel);
+      if (request.aborted) {
+        cancel();
+      }
+      try {
+        const result = await aiResponseService.respond({
+          bookId: request.params.bookId,
+          uid: request.auth.uid,
+          input: request.validatedBody,
+          signal: controller.signal,
+          requestId: request.id,
+        });
+        return response.status(200).json({ data: result });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return undefined;
+        }
+        throw error;
+      } finally {
+        request.removeListener("aborted", cancel);
+        response.removeListener("close", cancel);
+      }
     },
   );
   return router;

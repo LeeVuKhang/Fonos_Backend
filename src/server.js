@@ -57,6 +57,17 @@ async function main() {
     embeddingModel: config.geminiEmbeddingModel,
     embeddingDimension: config.aiEmbeddingDimension,
     timeoutMs: config.aiProviderTimeoutMs,
+    maxAttempts: config.aiProviderMaxAttempts,
+    retryBaseMs: config.aiProviderRetryBaseMs,
+    circuitFailureThreshold: config.aiCircuitFailureThreshold,
+    circuitOpenMs: config.aiCircuitOpenMs,
+    logger,
+  });
+  const aiResponseService = new AiResponseService({
+    repository: aiRepository,
+    aiProvider,
+    logger,
+    responseDeadlineMs: config.aiResponseDeadlineMs,
   });
   const aiIndexService = new AiIndexService({
     repository: aiRepository,
@@ -64,14 +75,10 @@ async function main() {
     embeddingModel: config.geminiEmbeddingModel,
     embeddingDimension: config.aiEmbeddingDimension,
     logger,
+    summaryWarmer: (bookId) => aiResponseService.warmSummaryCache(bookId, { locales: ["en"] }),
   });
   const aiIndexQueue = new AiIndexQueue({
     worker: ({ bookId, force }) => aiIndexService.indexBook(bookId, { force }),
-    logger,
-  });
-  const aiResponseService = new AiResponseService({
-    repository: aiRepository,
-    aiProvider,
     logger,
   });
   const audiobookService = new AudiobookService({ repository, queue, aiIndexQueue });

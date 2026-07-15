@@ -58,32 +58,43 @@ function effectiveLocale(input) {
 }
 
 export class AiResponseService {
-  constructor({ repository, aiProvider, logger }) {
+  constructor({ repository, aiProvider, logger, responseDeadlineMs = 30_000 }) {
     this.repository = repository;
     this.aiProvider = aiProvider;
     this.logger = logger;
+    this.responseDeadlineMs = responseDeadlineMs;
+    this.summaryInFlight = new Map();
   }
 
-  async respond({ bookId, uid, input }) {
+  async respond({ bookId, uid, input, signal, requestId }) {
     const startedAt = Date.now();
+    const requestOptions = {
+      deadlineAt: startedAt + this.responseDeadlineMs,
+      signal,
+      trace: { requestId, bookId },
+    };
     let outcome = "success";
     let cacheHit = false;
     let tokenUsage = { prompt: 0, output: 0, total: 0 };
     try {
+      this.ensureRequestActive(requestOptions);
       const book = await this.repository.getReadyBook(bookId);
+      this.ensureRequestActive(requestOptions);
       if (input.scope.type === "chapter"
           && !book.chapters?.some((chapter) => chapter.id === input.scope.chapterId)) {
         throw aiNotReady("chapter_not_published");
       }
       let result;
       if (input.mode === "summary") {
-        result = await this.summarize(book, input);
+        result = await this.summarize(book, input, requestOptions);
         cacheHit = result.cacheHit === true;
       } else {
-        result = await this.answerQuestion(book, input);
+        result = await this.answerQuestion(book, input, requestOptions);
       }
       tokenUsage = result.tokenUsage ?? tokenUsage;
+      this.ensureRequestActive(requestOptions);
       const currentBook = await this.repository.getReadyBook(bookId);
+      this.ensureRequestActive(requestOptions);
       if (currentBook.aiActiveVersion !== book.aiActiveVersion) {
         throw aiNotReady("content_version_changed");
       }
@@ -111,15 +122,25 @@ export class AiResponseService {
     }
   }
 
-  async summarize(book, input) {
+  async summarize(book, input, requestOptions = {}) {
     const locale = effectiveLocale(input);
     if (input.scope.type === "chapter") {
-      return this.summarizeChapter(book, input.scope.chapterId, locale);
+      return this.summarizeChapter(book, input.scope.chapterId, locale, undefined, requestOptions);
     }
+    const key = this.summaryKey(book, input.scope, locale);
+    return this.coalesceSummary(key, () => this.createBookSummary(
+      book,
+      input.scope,
+      locale,
+      requestOptions,
+    ));
+  }
+
+  async createBookSummary(book, scope, locale, requestOptions) {
     const cached = await this.repository.getSummary(
       book.id,
       book.aiActiveVersion,
-      input.scope,
+      scope,
       locale,
     );
     const allChunks = await this.repository.loadChunks(book.id, book.aiActiveVersion);
@@ -140,7 +161,13 @@ export class AiResponseService {
     const chapterSummaries = [];
     let chapterTokenUsage = { prompt: 0, output: 0, total: 0 };
     for (const [chapterId, chunks] of chapters.entries()) {
-      const summary = await this.summarizeChapter(book, chapterId, locale, chunks);
+      const summary = await this.summarizeChapter(
+        book,
+        chapterId,
+        locale,
+        chunks,
+        requestOptions,
+      );
       chapterSummaries.push({
         chapterId,
         chapterTitle: chunks[0].chapterTitle,
@@ -160,10 +187,10 @@ export class AiResponseService {
         `ALLOWED_CHUNK_IDS: ${chapter.citationChunkIds.join(", ")}`,
         `SUMMARY: ${chapter.answer}`,
       ].join("\n")).join("\n\n"),
-    ].join("\n"));
+    ].join("\n"), requestOptions);
     const result = this.normalizeGenerated(generated, allowedIds);
     result.tokenUsage = addTokenUsage(chapterTokenUsage, result.tokenUsage);
-    await this.repository.saveSummary(book.id, book.aiActiveVersion, input.scope, locale, {
+    await this.repository.saveSummary(book.id, book.aiActiveVersion, scope, locale, {
       answer: result.answer,
       notFound: result.notFound,
       citationChunkIds: result.citationChunkIds,
@@ -171,10 +198,21 @@ export class AiResponseService {
     return { ...result, availableChunks: allChunks, cacheHit: false };
   }
 
-  async summarizeChapter(book, chapterId, locale, suppliedChunks) {
+  async summarizeChapter(book, chapterId, locale, suppliedChunks, requestOptions = {}) {
     const scope = { type: "chapter", chapterId };
+    const key = this.summaryKey(book, scope, locale);
+    return this.coalesceSummary(key, () => this.createChapterSummary(
+      book,
+      scope,
+      locale,
+      suppliedChunks,
+      requestOptions,
+    ));
+  }
+
+  async createChapterSummary(book, scope, locale, suppliedChunks, requestOptions) {
     const chunks = suppliedChunks
-      ?? await this.repository.loadChunks(book.id, book.aiActiveVersion, chapterId);
+      ?? await this.repository.loadChunks(book.id, book.aiActiveVersion, scope.chapterId);
     if (chunks.length === 0) {
       throw aiNotReady("chapter_not_indexed");
     }
@@ -187,7 +225,7 @@ export class AiResponseService {
       "Be concise but cover its important events, arguments, and outcomes.",
       "BOOK_CONTEXT:",
       contextBlock(chunks),
-    ].join("\n\n"));
+    ].join("\n\n"), requestOptions);
     const result = this.normalizeGenerated(generated, new Set(chunks.map((chunk) => chunk.id)));
     await this.repository.saveSummary(book.id, book.aiActiveVersion, scope, locale, {
       answer: result.answer,
@@ -197,9 +235,67 @@ export class AiResponseService {
     return { ...result, availableChunks: chunks, cacheHit: false };
   }
 
-  async answerQuestion(book, input) {
+  async coalesceSummary(key, factory) {
+    const existing = this.summaryInFlight.get(key);
+    if (existing) {
+      return existing;
+    }
+    const task = Promise.resolve().then(factory);
+    this.summaryInFlight.set(key, task);
+    try {
+      return await task;
+    } finally {
+      if (this.summaryInFlight.get(key) === task) {
+        this.summaryInFlight.delete(key);
+      }
+    }
+  }
+
+  summaryKey(book, scope, locale) {
+    const scopeKey = scope.type === "chapter" ? `chapter:${scope.chapterId}` : "book";
+    return `${book.id}:${book.aiActiveVersion}:${scopeKey}:${locale}`;
+  }
+
+  async warmSummaryCache(bookId, { locales = ["en"] } = {}) {
+    const startedAt = Date.now();
+    let outcome = "success";
+    try {
+      const book = await this.repository.getReadyBook(bookId);
+      for (const locale of locales) {
+        await this.summarize(book, {
+          mode: "summary",
+          scope: { type: "book" },
+          locale,
+          history: [],
+        }, { trace: { bookId } });
+      }
+      const currentBook = await this.repository.getReadyBook(bookId);
+      if (currentBook.aiActiveVersion !== book.aiActiveVersion) {
+        throw aiNotReady("content_version_changed");
+      }
+      return {
+        bookId,
+        version: book.aiActiveVersion,
+        locales,
+        chapterCount: book.chapters?.length ?? 0,
+      };
+    } catch (error) {
+      outcome = error?.code ?? "failed";
+      throw error;
+    } finally {
+      this.logger?.info?.({
+        bookId,
+        locales,
+        outcome,
+        durationMs: Date.now() - startedAt,
+      }, "AI summary cache warm completed");
+    }
+  }
+
+  async answerQuestion(book, input, requestOptions = {}) {
     const retrievalText = [historyBlock(input.history), input.question].filter(Boolean).join("\n");
-    const embedding = await this.aiProvider.embedQuery(retrievalText);
+    const embedding = await this.aiProvider.embedQuery(retrievalText, requestOptions);
+    this.ensureRequestActive(requestOptions);
     const chunks = await this.repository.findNearestChunks(
       book.id,
       book.aiActiveVersion,
@@ -217,16 +313,17 @@ export class AiResponseService {
       `LATEST_QUESTION: ${input.question}`,
       "BOOK_CONTEXT:",
       contextBlock(chunks),
-    ].filter(Boolean).join("\n\n"));
+    ].filter(Boolean).join("\n\n"), requestOptions);
     const result = this.normalizeGenerated(generated, new Set(chunks.map((chunk) => chunk.id)));
     return { ...result, availableChunks: chunks };
   }
 
-  async generateValidated(prompt) {
+  async generateValidated(prompt, requestOptions = {}) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const raw = await this.aiProvider.generateStructured({
         systemInstruction: SYSTEM_INSTRUCTION,
         prompt,
+        requestOptions,
       });
       const parsed = generatedAnswerSchema.safeParse(raw?.data ?? raw);
       if (parsed.success) {
@@ -234,6 +331,19 @@ export class AiResponseService {
       }
     }
     throw aiProviderUnavailable();
+  }
+
+  ensureRequestActive(requestOptions) {
+    if (requestOptions.signal?.aborted) {
+      const error = new Error("AI request cancelled");
+      error.code = "request_cancelled";
+      error.cancelled = true;
+      throw error;
+    }
+    if (Number.isFinite(requestOptions.deadlineAt)
+        && Date.now() >= requestOptions.deadlineAt) {
+      throw aiProviderUnavailable(5);
+    }
   }
 
   normalizeGenerated(generated, allowedIds) {

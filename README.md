@@ -164,6 +164,11 @@ errors are `409 ai_not_ready`, `429 ai_rate_limit_exceeded`, and
 100 per day; configure them with `AI_RATE_LIMIT_PER_MINUTE` and
 `AI_DAILY_LIMIT` for the demo.
 
+Provider calls use one bounded retry, a 30-second end-to-end response deadline,
+and separate in-process circuits for embeddings and answer generation. A 503
+includes `Retry-After`; clients should preserve the pending question and wait
+that many seconds before retrying.
+
 Reviews are stored at `books/{bookId}/reviews/{uid}`. Star-only reviews affect
 the rating aggregates but are excluded from the written-review feed. All
 timestamps and aggregates are server controlled.
@@ -228,7 +233,9 @@ npm run ai:index -- --book-id=book-1 --force
 
 Publication enqueues indexing asynchronously. Server startup also re-enqueues
 books left in `indexing`. Unchanged ready books are skipped unless `--force` is
-used. A book with missing source becomes
+used, but still warm any missing English chapter and whole-book summaries.
+Summary warm failures are retried on the next indexing/backfill run and do not
+roll back an already active index. A book with missing source becomes
 `unavailable/missing_source_text`; provider or activation failures become
 `failed` with a sanitized reason.
 
@@ -236,7 +243,9 @@ If queries return `ai_not_ready`, inspect the book status and finish the
 backfill/index command. If Firestore reports `FAILED_PRECONDITION`, deploy the
 vector indexes and wait for them to reach `READY`. If the API returns
 `ai_provider_unavailable`, verify `GEMINI_API_KEY`, model names, network access,
-and the 25-second provider timeout.
+quota, and provider failure logs. `AI_PROVIDER_TIMEOUT_MS` limits each provider
+attempt (12 seconds by default), while `AI_RESPONSE_DEADLINE_MS` limits an
+interactive Ask AI request to 30 seconds.
 
 ### `GET /health`
 

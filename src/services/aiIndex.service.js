@@ -2,12 +2,20 @@ import { aiNotReady } from "../errors.js";
 import { chunkBook, contentVersion, normalizeSourceText } from "./aiContent.service.js";
 
 export class AiIndexService {
-  constructor({ repository, aiProvider, embeddingModel, embeddingDimension, logger }) {
+  constructor({
+    repository,
+    aiProvider,
+    embeddingModel,
+    embeddingDimension,
+    logger,
+    summaryWarmer,
+  }) {
     this.repository = repository;
     this.aiProvider = aiProvider;
     this.embeddingModel = embeddingModel;
     this.embeddingDimension = embeddingDimension;
     this.logger = logger;
+    this.summaryWarmer = summaryWarmer;
   }
 
   async indexBook(bookId, { force = false } = {}) {
@@ -25,12 +33,16 @@ export class AiIndexService {
       }
       version = contentVersion(book.chapters);
       if (!force && book.aiStatus === "ready" && book.aiActiveVersion === version) {
-        return { bookId, status: "ready", version, skipped: true };
+        const summaryWarmStatus = await this.warmSummaries(bookId);
+        return { bookId, status: "ready", version, skipped: true, summaryWarmStatus };
       }
 
       await this.repository.markIndexing(bookId, version);
       const chunks = chunkBook(book.chapters);
-      const embeddings = await this.aiProvider.embedDocuments(chunks.map((chunk) => chunk.text));
+      const embeddings = await this.aiProvider.embedDocuments(
+        chunks.map((chunk) => chunk.text),
+        { trace: { bookId } },
+      );
       await this.repository.writeVersion({
         bookId,
         version,
@@ -45,8 +57,15 @@ export class AiIndexService {
       }
       await this.repository.activateVersion(bookId, version);
       await this.repository.cleanupVersions(bookId, [version, book.aiActiveVersion]);
+      const summaryWarmStatus = await this.warmSummaries(bookId);
       this.logger?.info?.({ bookId, version, chunkCount: chunks.length }, "AI index activated");
-      return { bookId, status: "ready", version, chunkCount: chunks.length };
+      return {
+        bookId,
+        status: "ready",
+        version,
+        chunkCount: chunks.length,
+        summaryWarmStatus,
+      };
     } catch (error) {
       if (version) {
         await this.repository.markFailed(
@@ -57,6 +76,23 @@ export class AiIndexService {
       }
       this.logger?.warn?.({ bookId, code: error?.code }, "AI indexing failed");
       throw error;
+    }
+  }
+
+  async warmSummaries(bookId) {
+    if (!this.summaryWarmer) {
+      return "disabled";
+    }
+    try {
+      await this.summaryWarmer(bookId);
+      return "ready";
+    } catch (error) {
+      this.logger?.warn?.({
+        bookId,
+        code: error?.code,
+        retryAfterSeconds: error?.retryAfterSeconds,
+      }, "AI summary cache warm failed");
+      return "failed";
     }
   }
 }
