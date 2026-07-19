@@ -3,7 +3,7 @@ import { createFirebaseAdmin } from "../src/lib/firebaseAdmin.js";
 import { createAppLogger } from "../src/logger.js";
 import { FirestoreAiRepository } from "../src/repositories/ai.repository.js";
 import { AiIndexService } from "../src/services/aiIndex.service.js";
-import { GeminiAiService } from "../src/services/geminiAi.service.js";
+import { GeminiEmbeddingService } from "../src/services/geminiEmbedding.service.js";
 
 function parseArgs(args) {
   return {
@@ -28,9 +28,8 @@ async function main() {
     firestore: firebase.firestore,
     serverTimestamp: firebase.serverTimestamp,
   });
-  const aiProvider = new GeminiAiService({
+  const aiProvider = new GeminiEmbeddingService({
     apiKey: config.geminiApiKey,
-    chatModel: config.geminiChatModel,
     embeddingModel: config.geminiEmbeddingModel,
     embeddingDimension: config.aiEmbeddingDimension,
     timeoutMs: config.aiProviderTimeoutMs,

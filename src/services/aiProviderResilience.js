@@ -1,3 +1,7 @@
+import { setTimeout as delay } from "node:timers/promises";
+
+import { aiProviderUnavailable } from "../errors.js";
+
 const NETWORK_ERROR_CODES = new Set([
   "ECONNREFUSED",
   "ECONNRESET",
@@ -8,9 +12,18 @@ const NETWORK_ERROR_CODES = new Set([
 ]);
 
 function integerStatus(error) {
-  const value = error?.status ?? error?.statusCode ?? error?.response?.status;
+  const value = error?.status
+    ?? error?.statusCode
+    ?? error?.response?.status
+    ?? error?.cause?.status
+    ?? error?.cause?.statusCode;
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : null;
+}
+
+function retryAfterSeconds(error, fallback) {
+  const parsed = Number(error?.retryAfterSeconds);
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 300) : fallback;
 }
 
 export class AiProviderFailure extends Error {
@@ -65,10 +78,25 @@ export function classifyProviderError(error, { operation, model, abortCategory }
   }
 
   const status = integerStatus(error);
-  const upstreamCode = typeof error?.code === "string" ? error.code : null;
-  if (status === 400) {
+  const upstreamCode = typeof error?.code === "string"
+    ? error.code
+    : typeof error?.cause?.code === "string" ? error.cause.code : null;
+  if (status === 400 || status === 422) {
     return new AiProviderFailure({
       operation, model, category: "bad_request", upstreamStatus: status, upstreamCode, cause: error,
+    });
+  }
+  if (status === 402) {
+    return new AiProviderFailure({
+      operation,
+      model,
+      category: "quota",
+      upstreamStatus: status,
+      upstreamCode,
+      affectsCircuit: true,
+      immediateOpen: true,
+      retryAfterSeconds: retryAfterSeconds(error, 30),
+      cause: error,
     });
   }
   if (status === 401 || status === 403) {
@@ -80,7 +108,7 @@ export function classifyProviderError(error, { operation, model, abortCategory }
       upstreamCode,
       affectsCircuit: true,
       immediateOpen: true,
-      retryAfterSeconds: 30,
+      retryAfterSeconds: retryAfterSeconds(error, 30),
       cause: error,
     });
   }
@@ -93,7 +121,7 @@ export function classifyProviderError(error, { operation, model, abortCategory }
       upstreamCode,
       affectsCircuit: true,
       immediateOpen: true,
-      retryAfterSeconds: 30,
+      retryAfterSeconds: retryAfterSeconds(error, 30),
       cause: error,
     });
   }
@@ -106,6 +134,7 @@ export function classifyProviderError(error, { operation, model, abortCategory }
       upstreamCode,
       retryable: true,
       affectsCircuit: true,
+      retryAfterSeconds: retryAfterSeconds(error, 5),
       cause: error,
     });
   }
@@ -118,7 +147,7 @@ export function classifyProviderError(error, { operation, model, abortCategory }
       upstreamCode,
       retryable: true,
       affectsCircuit: true,
-      retryAfterSeconds: 30,
+      retryAfterSeconds: retryAfterSeconds(error, 30),
       cause: error,
     });
   }
@@ -131,6 +160,7 @@ export function classifyProviderError(error, { operation, model, abortCategory }
       upstreamCode,
       retryable: true,
       affectsCircuit: true,
+      retryAfterSeconds: retryAfterSeconds(error, 5),
       cause: error,
     });
   }
@@ -139,7 +169,9 @@ export function classifyProviderError(error, { operation, model, abortCategory }
       operation, model, category: "client_error", upstreamStatus: status, upstreamCode, cause: error,
     });
   }
-  if (error?.name === "AbortError" || upstreamCode === "ETIMEDOUT") {
+  if (error?.name === "AbortError"
+      || error?.name === "TimeoutError"
+      || upstreamCode === "ETIMEDOUT") {
     return new AiProviderFailure({
       operation,
       model,
@@ -270,5 +302,206 @@ export class ProviderCircuitBreaker {
       return fallback;
     }
     return Math.max(1, Math.ceil((entry.openUntil - this.now()) / 1000));
+  }
+}
+
+export class ResilientProviderExecutor {
+  constructor({
+    provider,
+    configured,
+    timeoutMs,
+    maxAttempts = 2,
+    retryBaseMs = 400,
+    circuitFailureThreshold = 3,
+    circuitOpenMs = 30_000,
+    logger,
+    circuitBreaker,
+    now = Date.now,
+    random = Math.random,
+    sleep = (milliseconds, signal) => delay(
+      milliseconds,
+      undefined,
+      signal ? { signal } : undefined,
+    ),
+  }) {
+    this.provider = provider;
+    this.configured = configured;
+    this.timeoutMs = timeoutMs ?? 12_000;
+    this.maxAttempts = maxAttempts;
+    this.retryBaseMs = retryBaseMs;
+    this.logger = logger;
+    this.now = now;
+    this.random = random;
+    this.sleep = sleep;
+    this.circuit = circuitBreaker ?? new ProviderCircuitBreaker({
+      failureThreshold: circuitFailureThreshold,
+      openMs: circuitOpenMs,
+      now,
+    });
+  }
+
+  ensureConfigured(operation, model, requestOptions) {
+    if (this.configured) {
+      return;
+    }
+    const failure = new AiProviderFailure({
+      operation,
+      model,
+      category: "configuration_missing",
+      affectsCircuit: true,
+      immediateOpen: true,
+      retryAfterSeconds: 30,
+    });
+    const circuitState = this.circuit.recordFailure(operation, failure);
+    this.logFailure({
+      failure,
+      requestOptions,
+      attempt: 0,
+      durationMs: 0,
+      circuitState,
+    });
+    throw aiProviderUnavailable(30);
+  }
+
+  async execute({ operation, model, requestOptions = {}, call }) {
+    const initialRemainingMs = this.remainingMs(requestOptions.deadlineAt);
+    if (initialRemainingMs != null && initialRemainingMs <= 0) {
+      throw aiProviderUnavailable(5);
+    }
+    const permission = this.circuit.beforeCall(operation);
+    if (!permission.allowed) {
+      this.logger?.warn?.({
+        provider: this.provider,
+        operation,
+        model,
+        category: "circuit_open",
+        circuitState: permission.state,
+        retryAfterSeconds: permission.retryAfterSeconds,
+        ...this.traceFields(requestOptions),
+      }, "AI provider circuit rejected request");
+      throw aiProviderUnavailable(permission.retryAfterSeconds);
+    }
+    this.ensureConfigured(operation, model, requestOptions);
+
+    let finalFailure;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      const remainingMs = this.remainingMs(requestOptions.deadlineAt);
+      if (remainingMs != null && remainingMs <= 0) {
+        finalFailure = classifyProviderError(new Error("deadline"), {
+          operation,
+          model,
+          abortCategory: "deadline_exceeded",
+        });
+        break;
+      }
+      const timeoutMs = Math.max(1, Math.min(this.timeoutMs, remainingMs ?? this.timeoutMs));
+      const deadlineSignal = remainingMs == null ? null : AbortSignal.timeout(remainingMs);
+      const attemptSignal = AbortSignal.timeout(timeoutMs);
+      const signal = this.combineSignals(requestOptions.signal, deadlineSignal, attemptSignal);
+      const backoffSignal = this.combineSignals(requestOptions.signal, deadlineSignal);
+      const startedAt = this.now();
+      try {
+        const result = await call({ timeoutMs, signal });
+        this.circuit.recordSuccess(operation);
+        return result;
+      } catch (error) {
+        const abortCategory = requestOptions.signal?.aborted
+          ? "client_cancelled"
+          : deadlineSignal?.aborted ? "deadline_exceeded" : null;
+        finalFailure = classifyProviderError(error, { operation, model, abortCategory });
+        this.logFailure({
+          failure: finalFailure,
+          requestOptions,
+          attempt,
+          durationMs: this.now() - startedAt,
+          circuitState: this.circuit.state(operation),
+        });
+        if (finalFailure.cancelled) {
+          this.circuit.recordCancellation(operation);
+          throw finalFailure;
+        }
+        const retryDelayMs = this.retryDelayMs();
+        if (!finalFailure.retryable
+            || attempt >= this.maxAttempts
+            || (remainingMs != null && remainingMs < retryDelayMs + 1000)) {
+          break;
+        }
+        try {
+          await this.sleep(retryDelayMs, backoffSignal);
+        } catch (sleepError) {
+          const sleepAbortCategory = requestOptions.signal?.aborted
+            ? "client_cancelled"
+            : deadlineSignal?.aborted ? "deadline_exceeded" : null;
+          const sleepFailure = classifyProviderError(sleepError, {
+            operation,
+            model,
+            abortCategory: sleepAbortCategory,
+          });
+          if (sleepFailure.cancelled) {
+            this.circuit.recordCancellation(operation);
+            throw sleepFailure;
+          }
+          break;
+        }
+      }
+    }
+
+    const circuitState = this.circuit.recordFailure(operation, finalFailure);
+    const retryAfter = circuitState === "open"
+      ? this.circuit.retryAfterSeconds(operation, finalFailure.retryAfterSeconds)
+      : finalFailure.retryAfterSeconds;
+    if (circuitState === "open") {
+      this.logger?.warn?.({
+        provider: this.provider,
+        operation,
+        model,
+        category: "circuit_opened",
+        circuitState,
+        retryAfterSeconds: retryAfter,
+        ...this.traceFields(requestOptions),
+      }, "AI provider circuit opened");
+    }
+    throw aiProviderUnavailable(retryAfter);
+  }
+
+  retryDelayMs() {
+    return this.retryBaseMs + Math.floor(this.random() * 201);
+  }
+
+  remainingMs(deadlineAt) {
+    return Number.isFinite(deadlineAt) ? Math.max(0, deadlineAt - this.now()) : null;
+  }
+
+  combineSignals(...signals) {
+    const available = signals.filter(Boolean);
+    if (available.length === 0) {
+      return undefined;
+    }
+    return available.length === 1 ? available[0] : AbortSignal.any(available);
+  }
+
+  traceFields(requestOptions) {
+    return {
+      requestId: requestOptions.trace?.requestId,
+      bookId: requestOptions.trace?.bookId,
+    };
+  }
+
+  logFailure({ failure, requestOptions, attempt, durationMs, circuitState }) {
+    this.logger?.warn?.({
+      provider: this.provider,
+      operation: failure.operation,
+      model: failure.model,
+      category: failure.category,
+      upstreamStatus: failure.upstreamStatus,
+      upstreamCode: failure.upstreamCode,
+      retryable: failure.retryable,
+      affectsCircuit: failure.affectsCircuit,
+      attempt,
+      maxAttempts: this.maxAttempts,
+      durationMs,
+      circuitState,
+      ...this.traceFields(requestOptions),
+    }, "AI provider attempt failed");
   }
 }

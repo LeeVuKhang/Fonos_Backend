@@ -13,7 +13,9 @@ import { CommunityService } from "./services/community.service.js";
 import { AwsAudioService } from "./services/aws.service.js";
 import { GenerationService } from "./services/generation.service.js";
 import { GenerationNotificationService } from "./services/generationNotification.service.js";
-import { GeminiAiService } from "./services/geminiAi.service.js";
+import { AiProviderService } from "./services/aiProvider.service.js";
+import { DeepSeekChatService } from "./services/deepseekChat.service.js";
+import { GeminiEmbeddingService } from "./services/geminiEmbedding.service.js";
 import { AiIndexService } from "./services/aiIndex.service.js";
 import { AiResponseService } from "./services/aiResponse.service.js";
 
@@ -51,9 +53,8 @@ async function main() {
     firestore: firebase.firestore,
     serverTimestamp: firebase.serverTimestamp,
   });
-  const aiProvider = new GeminiAiService({
+  const embeddingProvider = new GeminiEmbeddingService({
     apiKey: config.geminiApiKey,
-    chatModel: config.geminiChatModel,
     embeddingModel: config.geminiEmbeddingModel,
     embeddingDimension: config.aiEmbeddingDimension,
     timeoutMs: config.aiProviderTimeoutMs,
@@ -63,11 +64,24 @@ async function main() {
     circuitOpenMs: config.aiCircuitOpenMs,
     logger,
   });
+  const chatProvider = new DeepSeekChatService({
+    apiKey: config.deepseekApiKey,
+    chatModel: config.deepseekChatModel,
+    timeoutMs: config.aiProviderTimeoutMs,
+    maxAttempts: config.aiProviderMaxAttempts,
+    retryBaseMs: config.aiProviderRetryBaseMs,
+    circuitFailureThreshold: config.aiCircuitFailureThreshold,
+    circuitOpenMs: config.aiCircuitOpenMs,
+    logger,
+  });
+  const aiProvider = new AiProviderService({ embeddingProvider, chatProvider });
   const aiResponseService = new AiResponseService({
     repository: aiRepository,
     aiProvider,
     logger,
     responseDeadlineMs: config.aiResponseDeadlineMs,
+    generationProvider: "deepseek",
+    generationModel: config.deepseekChatModel,
   });
   const aiIndexService = new AiIndexService({
     repository: aiRepository,

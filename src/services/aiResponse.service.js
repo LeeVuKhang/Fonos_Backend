@@ -58,11 +58,20 @@ function effectiveLocale(input) {
 }
 
 export class AiResponseService {
-  constructor({ repository, aiProvider, logger, responseDeadlineMs = 30_000 }) {
+  constructor({
+    repository,
+    aiProvider,
+    logger,
+    responseDeadlineMs = 30_000,
+    generationProvider = "deepseek",
+    generationModel = "deepseek-v4-flash",
+  }) {
     this.repository = repository;
     this.aiProvider = aiProvider;
     this.logger = logger;
     this.responseDeadlineMs = responseDeadlineMs;
+    this.generationProvider = generationProvider;
+    this.generationModel = generationModel;
     this.summaryInFlight = new Map();
   }
 
@@ -147,7 +156,7 @@ export class AiResponseService {
     if (allChunks.length === 0) {
       throw aiNotReady("missing_source_text");
     }
-    if (cached?.answer) {
+    if (this.isCurrentSummary(cached)) {
       return { ...cached, availableChunks: allChunks, cacheHit: true };
     }
 
@@ -194,6 +203,7 @@ export class AiResponseService {
       answer: result.answer,
       notFound: result.notFound,
       citationChunkIds: result.citationChunkIds,
+      ...this.summaryGenerationMetadata(),
     });
     return { ...result, availableChunks: allChunks, cacheHit: false };
   }
@@ -217,7 +227,7 @@ export class AiResponseService {
       throw aiNotReady("chapter_not_indexed");
     }
     const cached = await this.repository.getSummary(book.id, book.aiActiveVersion, scope, locale);
-    if (cached?.answer) {
+    if (this.isCurrentSummary(cached)) {
       return { ...cached, availableChunks: chunks, cacheHit: true };
     }
     const generated = await this.generateValidated([
@@ -231,6 +241,7 @@ export class AiResponseService {
       answer: result.answer,
       notFound: result.notFound,
       citationChunkIds: result.citationChunkIds,
+      ...this.summaryGenerationMetadata(),
     });
     return { ...result, availableChunks: chunks, cacheHit: false };
   }
@@ -253,7 +264,27 @@ export class AiResponseService {
 
   summaryKey(book, scope, locale) {
     const scopeKey = scope.type === "chapter" ? `chapter:${scope.chapterId}` : "book";
-    return `${book.id}:${book.aiActiveVersion}:${scopeKey}:${locale}`;
+    return [
+      book.id,
+      book.aiActiveVersion,
+      scopeKey,
+      locale,
+      this.generationProvider,
+      this.generationModel,
+    ].join(":");
+  }
+
+  isCurrentSummary(summary) {
+    return Boolean(summary?.answer)
+      && summary.generationProvider === this.generationProvider
+      && summary.generationModel === this.generationModel;
+  }
+
+  summaryGenerationMetadata() {
+    return {
+      generationProvider: this.generationProvider,
+      generationModel: this.generationModel,
+    };
   }
 
   async warmSummaryCache(bookId, { locales = ["en"] } = {}) {
