@@ -20,7 +20,7 @@ Demo Node.js + Express backend for user-generated audiobooks in the Android emul
 - Lists comment-bearing reviews with cursor pagination while returning the
   caller's review separately so rating-only submissions remain editable.
 - Indexes complete published chapter `sourceText` with Gemini embeddings and
-  serves grounded book/chapter summaries and Q&amp;A with backend-owned citations.
+  serves DeepSeek-generated grounded summaries and Q&amp;A with backend-owned citations.
 
 Generated books remain `published=false` until the creator publishes
 ready-for-review audio from Android My Uploads. Published user-generated books
@@ -36,9 +36,11 @@ npm run dev
 ```
 
 Fill `.env` with your Firebase project ID, Firebase Admin service-account path,
-AWS profile, S3 bucket, and backend-only `GEMINI_API_KEY`. The defaults use
-`gemini-3.5-flash`, `gemini-embedding-2`, and 768-dimensional embeddings. Do
-not commit `.env`, service account JSON files, Gemini keys, or AWS keys.
+AWS profile, S3 bucket, backend-only `GEMINI_API_KEY` for embeddings, and
+backend-only `DEEPSEEK_API_KEY` for answer generation. The defaults use
+`deepseek-v4-flash` in non-thinking mode, `gemini-embedding-2`, and
+768-dimensional embeddings. Do not commit `.env`, service account JSON files,
+AI provider keys, or AWS keys.
 
 The server listens on `0.0.0.0:8080` by default. Port `5555` is reserved by the
 Android Emulator/ADB and can cause connections to close without an HTTP response.
@@ -242,10 +244,11 @@ roll back an already active index. A book with missing source becomes
 If queries return `ai_not_ready`, inspect the book status and finish the
 backfill/index command. If Firestore reports `FAILED_PRECONDITION`, deploy the
 vector indexes and wait for them to reach `READY`. If the API returns
-`ai_provider_unavailable`, verify `GEMINI_API_KEY`, model names, network access,
-quota, and provider failure logs. `AI_PROVIDER_TIMEOUT_MS` limits each provider
-attempt (12 seconds by default), while `AI_RESPONSE_DEADLINE_MS` limits an
-interactive Ask AI request to 30 seconds.
+`ai_provider_unavailable`, verify `DEEPSEEK_API_KEY` for generation,
+`GEMINI_API_KEY` for embeddings, model names, network access, quota, and
+provider failure logs. `AI_PROVIDER_TIMEOUT_MS` limits each provider attempt
+(12 seconds by default), while `AI_RESPONSE_DEADLINE_MS` limits an interactive
+Ask AI request to 30 seconds.
 
 ### `GET /health`
 
