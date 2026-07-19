@@ -15,9 +15,11 @@ describe("AI provider error classification", () => {
   it.each([
     [400, "bad_request", false, false, false],
     [401, "authentication", false, true, true],
+    [402, "quota", false, true, true],
     [403, "authentication", false, true, true],
     [404, "model_not_found", false, true, true],
     [408, "timeout", true, true, false],
+    [422, "bad_request", false, false, false],
     [429, "quota", true, true, false],
     [500, "provider_unavailable", true, true, false],
     [503, "provider_unavailable", true, true, false],
@@ -36,6 +38,16 @@ describe("AI provider error classification", () => {
     });
   });
 
+  it("uses a sanitized provider Retry-After value", () => {
+    const error = statusError(429);
+    error.retryAfterSeconds = 17;
+
+    expect(classifyProviderError(error, {
+      operation: "generation",
+      model: "chat-model",
+    })).toMatchObject({ retryAfterSeconds: 17 });
+  });
+
   it("classifies network and client-cancelled failures without exposing the cause message", () => {
     const network = new Error("prompt and API key must stay private");
     network.code = "ECONNRESET";
@@ -52,6 +64,23 @@ describe("AI provider error classification", () => {
     expect(networkFailure).toMatchObject({ category: "network", retryable: true });
     expect(networkFailure.message).toBe("AI provider request failed");
     expect(cancelled).toMatchObject({ category: "client_cancelled", cancelled: true });
+  });
+
+  it("classifies native fetch timeout and nested network causes", () => {
+    const timeout = new Error("request timed out");
+    timeout.name = "TimeoutError";
+    const fetchFailure = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+    });
+
+    expect(classifyProviderError(timeout, {
+      operation: "generation",
+      model: "chat-model",
+    })).toMatchObject({ category: "timeout", retryable: true });
+    expect(classifyProviderError(fetchFailure, {
+      operation: "generation",
+      model: "chat-model",
+    })).toMatchObject({ category: "network", upstreamCode: "ECONNRESET", retryable: true });
   });
 });
 

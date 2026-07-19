@@ -98,6 +98,12 @@ describe("AiResponseService", () => {
     expect(first.citations).toHaveLength(2);
     expect(second.answer).toBe("Whole book summary");
     expect(aiProvider.generateStructured).toHaveBeenCalledTimes(3);
+    expect([...summaries.values()]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        generationProvider: "deepseek",
+        generationModel: "deepseek-v4-flash",
+      }),
+    ]));
   });
 
   it("retries malformed structured output once and logs token counts without raw text", async () => {
@@ -176,6 +182,48 @@ describe("AiResponseService", () => {
       "chapter:chapter_2:en",
     ]);
     expect(aiProvider.generateStructured).toHaveBeenCalledTimes(3);
+  });
+
+  it("regenerates legacy or mismatched summary caches with the current provider model", async () => {
+    const repository = {
+      loadChunks: vi.fn().mockResolvedValue([chunks[0]]),
+      getSummary: vi.fn().mockResolvedValue({
+        answer: "Old Gemini summary",
+        notFound: false,
+        citationChunkIds: [chunks[0].id],
+        generationProvider: "gemini",
+        generationModel: "gemini-3.5-flash",
+      }),
+      saveSummary: vi.fn().mockResolvedValue(undefined),
+    };
+    const aiProvider = {
+      generateStructured: vi.fn().mockResolvedValue({
+        answer: "New DeepSeek summary",
+        notFound: false,
+        citationChunkIds: [chunks[0].id],
+      }),
+    };
+    const service = new AiResponseService({
+      repository,
+      aiProvider,
+      generationProvider: "deepseek",
+      generationModel: "deepseek-v4-flash",
+    });
+
+    await expect(service.summarizeChapter(readyBook(), "chapter_1", "en"))
+      .resolves.toMatchObject({ answer: "New DeepSeek summary", cacheHit: false });
+    expect(aiProvider.generateStructured).toHaveBeenCalledTimes(1);
+    expect(repository.saveSummary).toHaveBeenCalledWith(
+      "book-1",
+      "version-1",
+      { type: "chapter", chapterId: "chapter_1" },
+      "en",
+      expect.objectContaining({
+        answer: "New DeepSeek summary",
+        generationProvider: "deepseek",
+        generationModel: "deepseek-v4-flash",
+      }),
+    );
   });
 
   it("coalesces concurrent summary generation for the same content version and scope", async () => {
